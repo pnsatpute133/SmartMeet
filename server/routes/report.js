@@ -28,13 +28,17 @@ router.post('/save', async (req, res) => {
             totalTime:          p.totalTime          || 0,
             attentiveTime:      p.attentiveTime      || 0,
             distractedTime:     p.distractedTime     || 0,
-            phoneUsageTime:     p.phoneUsageTime     || 0,
+            phoneTime:          p.phoneTime          || 0,
             multiplePeopleTime: p.multiplePeopleTime || 0,
+            drowsyTime:         p.drowsyTime         || 0,
+            poorPostureTime:    p.poorPostureTime    || 0,
+            speakingTime:       p.speakingTime       || 0,
+            speakingMutedTime:  p.speakingMutedTime  || 0,
             noFaceTime:         p.noFaceTime         || 0,
             engagementScore:    p.engagementScore    || 0,
             warnings:           p.warnings           || [],
             summary:            p.summary            || '',
-            timeline:           (p.timeline || []).slice(-200), // keep last 200 events
+            timeline:           (p.timeline || []).slice(-200),
           })),
         }
       },
@@ -76,36 +80,34 @@ router.get('/:meetingId/csv', async (req, res) => {
     const csvData = participants.map(p => {
       const total = p.totalTime || 1; // avoid div/0
       return {
-        'Name':              p.name,
-        'Total Time (s)':    p.totalTime,
-        'Engagement Score':  `${p.engagementScore}%`,
-        'Attentive %':       `${Math.round((p.attentiveTime / total) * 100)}%`,
-        'Distracted %':      `${Math.round((p.distractedTime / total) * 100)}%`,
-        'Phone Usage %':     `${Math.round((p.phoneUsageTime / total) * 100)}%`,
-        'Multiple People %': `${Math.round((p.multiplePeopleTime / total) * 100)}%`,
-        'Warnings':          (p.warnings || []).join(' | '),
-        'Summary':           p.summary || '',
+        'Name':          p.name,
+        'Duration':      `${p.totalTime}s`,
+        'Engagement %':  `${p.engagementScore}%`,
+        'Phone %':       `${Math.round((p.phoneTime / total) * 100)}%`,
+        'Distracted %':  `${Math.round((p.distractedTime / total) * 100)}%`,
+        'Drowsy %':      `${Math.round(((p.drowsyTime || 0) / total) * 100)}%`,
+        'Warnings':      (p.warnings || []).join(' | '),
+        'Summary':       p.summary || '',
       };
     });
 
     if (csvData.length === 0) {
       csvData.push({
         'Name': 'No data',
-        'Total Time (s)': 0,
-        'Engagement Score': '0%',
-        'Attentive %': '0%',
+        'Duration': '0s',
+        'Engagement %': '0%',
+        'Phone %': '0%',
         'Distracted %': '0%',
-        'Phone Usage %': '0%',
-        'Multiple People %': '0%',
+        'Drowsy %': '0%',
         'Warnings': '',
         'Summary': 'No AI tracking data recorded for this meeting',
       });
     }
 
     const fields = [
-      'Name', 'Total Time (s)', 'Engagement Score',
-      'Attentive %', 'Distracted %', 'Phone Usage %',
-      'Multiple People %', 'Warnings', 'Summary',
+      'Name', 'Duration', 'Engagement %',
+      'Phone %', 'Distracted %', 'Drowsy %',
+      'Warnings', 'Summary',
     ];
 
     const parser = new Parser({ fields });

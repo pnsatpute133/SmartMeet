@@ -26,10 +26,12 @@ export default function useWebRTC(roomId, user) {
     setScreenShareApproval,
     muteLocal,
     unmuteLocal,
+    participants, // Added for debugging phase 8
   } = useMeetingStore();
 
   const [joinState, setJoinState]       = useState('idle'); // 'idle' | 'waiting' | 'approved' | 'rejected'
   const [joinRequests, setJoinRequests] = useState([]);    // { socketId, fromName, fromUserId }
+  const isJoinedRef = useRef(false); // PHASE 7: Prevent re-join issue
 
   // ─────────────────────────────────────────────────────────────
   // Active-speaker detection via AudioContext
@@ -178,6 +180,8 @@ export default function useWebRTC(roomId, user) {
 
     sock.on('connect', () => {
       console.log('[Socket] ✅ Connected:', sock.id);
+      // PHASE 8: Mandatory Log
+      console.log("Host socket:", sock.id);
     });
     sock.on('connect_error', err => {
       console.error('[Socket] ❌ Connection error:', err.message);
@@ -205,7 +209,10 @@ export default function useWebRTC(roomId, user) {
     
     sock.on('join-request', ({ fromSocketId, fromName, fromUserId }) => {
       console.log("Join request received (client):", { fromName, fromUserId });
-      setJoinRequests(prev => [...prev, { socketId: fromSocketId, fromName, fromUserId }]);
+      setJoinRequests(prev => {
+        if (prev.find(r => r.socketId === fromSocketId)) return prev;
+        return [...prev, { socketId: fromSocketId, fromName, fromUserId }];
+      });
     });
 
     // Set up all event listeners here (offer/answer/ice using native RTCPeerConnection)
@@ -220,12 +227,25 @@ export default function useWebRTC(roomId, user) {
       });
     });
 
-    // ── EVENT: An existing user sees me join ───────────────
+    // ── EVENT: An existing user (Host) sees me join ───────────────
     sock.on('user-joined', ({ socketId, userId, name }) => {
       console.log('[WebRTC] 👋 New user joined:', name);
+      
+      // PHASE 4: Host must connect to EVERY participant
       if (peersRef.current[socketId]) return;
-      // We'll await their offer and answer accordingly when offer arrives
+      
+      // If we are host, we initiate the connection (Phase 4)
+      const { isHost } = useMeetingStore.getState();
+      if (isHost) {
+        console.log(`[WebRTC] 👑 I am Host, initiating connection to new user: ${name}`);
+        createPeerConnectionAndOffer(socketId);
+      }
+      
       addParticipant({ socketId, userId, name });
+      
+      // PHASE 8: Mandatory Log
+      console.log("Participants state after join:", useMeetingStore.getState().participants);
+      console.log("Peers mapping:", peersRef.current);
     });
 
     // ── EVENT: Incoming offer from a remote peer ───────────
@@ -257,11 +277,16 @@ export default function useWebRTC(roomId, user) {
     // Full participant list sync from server
     sock.on('participants-update', users => {
       console.log('[WebRTC] 🔄 Participants update:', users.length, 'users');
-      // We keep the local user separated in store logic if needed, but the store
-      // setParticipants typically replaces the whole list. 
-      // Important: filter out local user so we don't render our own tile from peerStreams
+      // Filter out local user
       const remoteUsers = users.filter(u => u.socketId !== sock.id);
+      
+      // PHASE 1: Fix participant state overwriting
       setParticipants(remoteUsers);
+
+      // PHASE 8: Mandatory Logs
+      console.log("Participants state:", useMeetingStore.getState().participants);
+      console.log("Peers:", peersRef.current);
+      console.log("Host socket:", sock.id);
 
       // Also update isHost accurately from the list if not already set correctly
       const me = users.find(u => u.socketId === sock.id);
@@ -330,13 +355,21 @@ export default function useWebRTC(roomId, user) {
     });
 
     // PHASE 8: Host receives screen share request
-    sock.on('screen-share-request', ({ fromSocketId, fromName }) => {
-      console.log('[Socket] 📺 Screen share request from:', fromName);
-      setScreenShareRequest({ fromSocketId, fromName });
+    sock.on('screen-share-request', (user) => {
+      // MANDATORY DEBUG LOG
+      console.log("Received on host");
+      console.log("Host received screen request:", user);
+      
+      setScreenShareRequest({ 
+        userId: user.userId, 
+        name: user.name 
+      });
     });
 
     // PHASE 8: Screen share approval
     sock.on('screen-share-approved', () => {
+      // MANDATORY DEBUG LOG
+      console.log("Approved! Starting screen share");
       console.log('[Socket] ✅ Screen share approved by host');
       setScreenShareApproval(true);
     });
@@ -352,8 +385,39 @@ export default function useWebRTC(roomId, user) {
       window.location.href = '/';
     });
 
+    sock.on('host-warning', ({ message }) => {
+      console.log('[Socket] ⚠️ Host warning received:', message);
+      alert(message);
+    });
+
     return () => {
-      console.log('[WebRTC] 🧹 Disconnecting socket');
+      console.log('[WebRTC] 🧹 Cleaning up socket listeners');
+      sock.off('connect');
+      sock.off('connect_error');
+      sock.off('waiting-room');
+      sock.off('join-approved');
+      sock.off('join-rejected');
+      sock.off('join-request');
+      sock.off('all-users');
+      sock.off('user-joined');
+      sock.off('offer');
+      sock.off('answer');
+      sock.off('ice-candidate');
+      sock.off('participants-update');
+      sock.off('host-status');
+      sock.off('user-left');
+      sock.off('receive-message');
+      sock.off('user-media-status');
+      sock.off('user-hand-raised');
+      sock.off('force-mute');
+      sock.off('force-mute-user');
+      sock.off('force-unmute-user');
+      sock.off('meeting-ended');
+      sock.off('screen-share-request');
+      sock.off('screen-share-approved');
+      sock.off('screen-share-denied');
+      sock.off('kicked-from-room');
+      sock.off('host-warning');
       sock.disconnect();
     };
   }, []); // Empty dependency — create socket ONLY ONCE
@@ -375,13 +439,18 @@ export default function useWebRTC(roomId, user) {
 
         // Emit join-request AFTER media is ready (Phase 1)
         console.log("Sending join request (client)");
-        socketRef.current.emit('request-join', { 
-          roomId, 
-          userId: user._id, 
-          name: user.name,
-          joinState 
-        });
-        console.log('[Socket] 📡 Emitted request-join for', roomId, '(State:', joinState + ')');
+        
+        // PHASE 7: Prevent re-initialization if already joined with this sock instance
+        if (!isJoinedRef.current || joinState === 'idle') {
+          socketRef.current.emit('request-join', { 
+            roomId, 
+            userId: user._id, 
+            name: user.name,
+            joinState 
+          });
+          console.log('[Socket] 📡 Emitted request-join for', roomId, '(State:', joinState + ')');
+          if (joinState === 'approved') isJoinedRef.current = true;
+        }
       })
       .catch(err => {
         console.error('[WebRTC] ❌ Media error:', err);
@@ -439,20 +508,30 @@ export default function useWebRTC(roomId, user) {
 
   // PHASE 6: Request screen share permission
   const requestScreenShare = useCallback(() => {
+    // MANDATORY DEBUG LOG
+    console.log("Sending screen share request");
+    
     console.log('[WebRTC] 📺 Requesting screen share permission');
-    socketRef.current?.emit('request-screen-share');
-  }, []);
+    socketRef.current?.emit('request-screen-share', {
+      roomId,
+      userId: user?._id || user?.userId,
+      name: user?.name
+    });
+  }, [roomId, user]);
 
   // PHASE 6: Approve screen share
-  const approveScreenShare = useCallback((targetSocketId) => {
-    console.log('[WebRTC] ✅ Approving screen share for:', targetSocketId);
-    socketRef.current?.emit('approve-screen-share', targetSocketId);
-  }, []);
+  const approveScreenShare = useCallback((userId) => {
+    console.log('[WebRTC] ✅ Approving screen share for:', userId);
+    socketRef.current?.emit('approve-screen-share', {
+      roomId,
+      userId 
+    });
+  }, [roomId]);
 
   // PHASE 6: Deny screen share
-  const denyScreenShare = useCallback((targetSocketId) => {
-    console.log('[WebRTC] ❌ Denying screen share for:', targetSocketId);
-    socketRef.current?.emit('deny-screen-share', targetSocketId);
+  const denyScreenShare = useCallback((userId) => {
+    console.log('[WebRTC] ❌ Denying screen share for:', userId);
+    socketRef.current?.emit('deny-screen-share', userId);
   }, []);
 
   const updateMediaState = useCallback((isMuted, isVideoOff) => {

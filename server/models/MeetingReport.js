@@ -6,8 +6,12 @@ const ParticipantReportSchema = new mongoose.Schema({
   totalTime:       { type: Number, default: 0 },      // seconds
   attentiveTime:   { type: Number, default: 0 },
   distractedTime:  { type: Number, default: 0 },
-  phoneUsageTime:  { type: Number, default: 0 },
+  phoneTime:       { type: Number, default: 0 },
   multiplePeopleTime: { type: Number, default: 0 },
+  drowsyTime:      { type: Number, default: 0 },
+  poorPostureTime: { type: Number, default: 0 },
+  speakingTime:    { type: Number, default: 0 },
+  speakingMutedTime: { type: Number, default: 0 },
   noFaceTime:      { type: Number, default: 0 },
   engagementScore: { type: Number, default: 0 },      // 0–100
   warnings:        [String],

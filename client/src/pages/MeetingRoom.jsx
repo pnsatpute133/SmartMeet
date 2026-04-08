@@ -18,7 +18,8 @@ import AIAlertToast from '../components/AIAlertToast';
 
 import {
   Wifi, Clock, Loader2, CameraOff, Grid, Layout,
-  Maximize, Settings, MoreVertical, X, Shield, Brain, ArrowRight
+  Maximize, Settings, MoreVertical, X, Shield, Brain, ArrowRight,
+  MonitorPlay
 } from 'lucide-react';
 
 export default function MeetingRoom() {
@@ -385,7 +386,7 @@ export default function MeetingRoom() {
                     : 'bg-green-600/70 hover:bg-green-600/90 border-green-400/20 text-white'
                 }`}
               >
-                {aiEnabled ? '⏹ Stop AI' : '▶ Start AI'}
+                {aiEnabled ? '⏹ Stop AI Monitoring' : '▶ Start AI Monitoring'}
               </button>
               <button
                 onClick={() => setShowDashboard(true)}
@@ -604,19 +605,69 @@ export default function MeetingRoom() {
         </div>
       )}
 
-      {/* ── AI ALERT TOASTS (Participants get alerts from host/AI) ── */}
-      <AIAlertToast socket={socket} roomId={roomId} isHost={isHost} />
+      {/* ── SCREEN SHARE REQUEST TOAST (Host Only) ────────── */}
+      {isHost && screenShareRequest && (
+        <div className="fixed bottom-[13rem] left-6 z-[65] animate-in slide-in-from-left duration-300">
+          <div className="bg-[#1a1c1e] border border-blue-500/50 p-5 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col gap-4 max-w-xs border-l-4 border-l-blue-500">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-blue-600/20 rounded-2xl flex items-center justify-center text-blue-400">
+                <MonitorPlay size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-white">Screen Share Request</p>
+                <p className="text-xs text-gray-400 truncate">{screenShareRequest.name} wants to present</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => approveScreenShare(screenShareRequest.userId)}
+                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-lg shadow-blue-600/20"
+              >
+                Allow
+              </button>
+              <button
+                onClick={() => denyScreenShare(screenShareRequest.userId)}
+                className="flex-1 py-2.5 bg-[#3c4043] hover:bg-[#4a4e51] text-white rounded-xl text-xs font-bold transition-all active:scale-95"
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── AI ALERT TOASTS (Participants get alerts from their own AI module) ── */}
+      {!isHost && <AIAlertToast alert={aiAlert} status={myAiStatus} confidence={aiConfidence} />}
 
       {/* ── TEACHER DASHBOARD (Host Only) ────────────────── */}
       {isHost && showDashboard && (
         <TeacherDashboard
           onClose={() => setShowDashboard(false)}
           allTrackers={allTrackers}
-          onDownloadCSV={downloadCSV}
-          aiEnabled={aiEnabled}
-          onToggleAI={handleToggleAI}
-          meetingTime={meetingTime}
+          peerAiData={{}}
+          myTracker={myTracker}
           participants={participants}
+          aiEnabled={aiEnabled}
+          meetingTime={meetingTime}
+          onToggleAI={handleToggleAI}
+          onDownloadCSV={downloadCSV}
+          onDownloadAttendanceCSV={() => {
+            const url = `${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api/report/${roomId}/attendance/csv`;
+            const a = document.createElement('a');
+            a.href = url; a.target = '_blank';
+            a.download = `Attendance_${roomId.slice(0, 8)}.csv`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          }}
+          onSaveReport={() => saveMeetingReport({
+            participants: [myTracker, ...Object.values(allTrackers)],
+            duration: meetingTime,
+            hostName: user?.name,
+          })}
+          onWarn={(socketId, name) => {
+            socket?.emit('send-warning', { targetSocketId: socketId, message: `⚠️ Warning: ${name}, please pay attention!` });
+          }}
+          onMute={muteUser}
+          onRemove={kickParticipant}
         />
       )}
 

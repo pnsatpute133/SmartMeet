@@ -97,17 +97,17 @@ export default function ParticipantPanel({
             </p>
           </div>
           <p className="text-[13px] text-blue-300/80 mb-3">
-            <span className="font-semibold text-blue-200">{screenShareRequest.fromName}</span> wants to share their screen
+            <span className="font-semibold text-blue-200">{screenShareRequest.name}</span> wants to share their screen
           </p>
           <div className="flex gap-2">
             <button
-              onClick={() => approveScreenShare(screenShareRequest.fromSocketId)}
+              onClick={() => approveScreenShare(screenShareRequest.userId)}
               className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-all active:scale-95 shadow-lg shadow-blue-600/20"
             >
               Allow
             </button>
             <button
-              onClick={() => denyScreenShare(screenShareRequest.fromSocketId)}
+              onClick={() => denyScreenShare(screenShareRequest.userId)}
               className="flex-1 px-3 py-2 bg-[#3c4043] hover:bg-[#4a4e51] text-white rounded-lg text-xs font-semibold transition-all active:scale-95"
             >
               Deny

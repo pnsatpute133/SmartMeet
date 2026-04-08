@@ -29,17 +29,17 @@ export default function ParticipantList({
         </h2>
         {screenShareRequest && isHost && (
           <div className="mt-2 p-2 bg-blue-900 rounded text-sm text-blue-200">
-            <p className="font-semibold">📺 {screenShareRequest.fromName}</p>
+            <p className="font-semibold">📺 {screenShareRequest.name}</p>
             <p className="text-xs mt-1">Requesting screen share</p>
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => approveScreenShare(screenShareRequest.fromSocketId)}
+                onClick={() => approveScreenShare(screenShareRequest.userId)}
                 className="flex-1 px-2 py-1 bg-green-600 hover:bg-green-700 rounded text-xs font-semibold transition"
               >
                 Allow
               </button>
               <button
-                onClick={() => denyScreenShare(screenShareRequest.fromSocketId)}
+                onClick={() => denyScreenShare(screenShareRequest.userId)}
                 className="flex-1 px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-xs font-semibold transition"
               >
                 Deny

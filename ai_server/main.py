@@ -216,25 +216,25 @@ def classify_behaviour(
     Priority-based behavior classification.
     """
     if person_count == 0:
-        return "no_face", "⚠️ No face detected — please stay in view!", 0.5
+        return "no_face", "⚠️ No face detected", 0.5
 
     if person_count > 1:
-        return "multiple_people", "🚨 Unauthorized person detected!", 0.98
+        return "multiple_people", "🚨 Unauthorized person", 0.98
 
     if phone_detected:
-        return "phone", "📵 Multi-device distraction: Phone in use!", 0.95
+        return "phone", "Stop using phone", 0.95
 
     if advanced.get("is_drowsy"):
-        return "drowsy", "😴 You look sleepy — stay hydrated!", 0.90
+        return "drowsy", "Stay alert", 0.90
 
     if advanced.get("slumping"):
-        return "poor_posture", "🪑 Slumping detected — please sit straight.", 0.80
+        return "poor_posture", "Sit straight", 0.80
 
     if not advanced.get("facing_forward"):
-        return "distracted", "👀 Please focus on the screen!", 0.82
+        return "distracted", "Pay attention", 0.82
 
     if advanced.get("is_speaking") and is_muted:
-        return "speaking_muted", "🔇 You are speaking while muted!", 0.85
+        return "speaking_muted", "You are speaking while muted", 0.85
     
     if advanced.get("is_speaking"):
         return "speaking", None, 0.90

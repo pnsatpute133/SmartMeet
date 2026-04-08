@@ -23,7 +23,7 @@ const TICK_SEC       = 2;       // seconds each sample represents
 // ── Agentic pattern analyser ───────────────────────────────────────────────
 function analysePatterns(tracker) {
   const { 
-    attentiveTime, distractedTime, phoneUsageTime,
+    attentiveTime, distractedTime, phoneTime,
     multiplePeopleTime, drowsyTime, poorPostureTime,
     speakingTime, speakingMutedTime,
     totalTime, name 
@@ -31,13 +31,13 @@ function analysePatterns(tracker) {
 
   if (!totalTime) return { summary: 'No data yet', warnings: [], engagementScore: 0 };
 
-  const attPct    = Math.round(((attentiveTime + speakingTime) / totalTime) * 100);
+  const attPct    = Math.round((attentiveTime / totalTime) * 100);
   const distPct   = Math.round((distractedTime     / totalTime) * 100);
   const drowsyPct = Math.round((drowsyTime         / totalTime) * 100);
 
   const warnings = [];
   if (distractedTime  > 40) warnings.push(`Student distracted (${distPct}%)`);
-  if (phoneUsageTime  > 10) warnings.push(`Phone usage detected!`);
+  if (phoneTime       > 10) warnings.push(`Phone usage detected!`);
   if (drowsyTime      > 15) warnings.push(`Student looks drowsy.`);
   if (speakingMutedTime > 6) warnings.push(`Speaking while muted.`);
   if (attPct          < 40) warnings.push(`Very low focus.`);
@@ -58,7 +58,7 @@ function makeTracker(userId, name) {
     totalTime:          0,
     attentiveTime:      0,
     distractedTime:     0,
-    phoneUsageTime:     0,
+    phoneTime:          0,
     multiplePeopleTime: 0,
     drowsyTime:         0,
     poorPostureTime:    0,
@@ -129,7 +129,7 @@ export default function useEngagementMonitor({
     switch (status) {
       case 'attentive':        next.attentiveTime       += TICK_SEC; break;
       case 'distracted':       next.distractedTime      += TICK_SEC; break;
-      case 'phone':            next.phoneUsageTime      += TICK_SEC; break;
+      case 'phone':            next.phoneTime           += TICK_SEC; break;
       case 'multiple_people':  next.multiplePeopleTime  += TICK_SEC; break;
       case 'drowsy':           next.drowsyTime          += TICK_SEC; break;
       case 'poor_posture':     next.poorPostureTime     += TICK_SEC; break;

@@ -20,7 +20,7 @@ const useMeetingStore = create((set, get) => ({
   },
 
   // ── Screen Share ───────────────────────────────────
-  screenShareRequest: null, // { fromSocketId, fromName }
+  screenShareRequest: null, // { userId, name }
   screenSharePending: false,
 
   // ── UI ─────────────────────────────────────────────
@@ -32,7 +32,33 @@ const useMeetingStore = create((set, get) => ({
 
   // ── Participant Management ─────────────────────────
   // Full replacement (from server's participants-update)
-  setParticipants: (users) => set({ participants: users }),
+  setParticipants: (newUsers) => set(state => {
+    const updated = [...state.participants];
+    
+    newUsers.forEach(user => {
+      const existingIdx = updated.findIndex(u => u.userId === user.userId || u.socketId === user.socketId);
+      if (existingIdx !== -1) {
+        // Update existing
+        updated[existingIdx] = { ...updated[existingIdx], ...user };
+      } else {
+        // Add new
+        updated.push({
+          isMuted: false, 
+          isVideoOn: true, 
+          isHandRaised: false, 
+          isScreenSharing: false,
+          hasScreenShareApproval: false,
+          ...user
+        });
+      }
+    });
+
+    // Remove users not in server list (to keep sync)
+    const serverSocketIds = new Set(newUsers.map(u => u.socketId));
+    const synced = updated.filter(p => serverSocketIds.has(p.socketId));
+
+    return { participants: synced };
+  }),
 
   // Upsert a single participant
   addParticipant: (user) => set(state => ({

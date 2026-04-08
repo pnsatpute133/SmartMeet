@@ -17,8 +17,8 @@ async function saveFinalReport(roomId, roomData) {
       { meetingId: roomId },
       {
         $set: {
-          meetingId:  roomId,
-          endedAt:    new Date(),
+          meetingId: roomId,
+          endedAt: new Date(),
           attendance: roomData.attendanceLog
         }
       },
@@ -61,21 +61,23 @@ module.exports = (io, socket) => {
 
     // Init room if new
     if (!rooms[roomId]) {
-      rooms[roomId] = { 
-        hostSocketId: socket.id, // Current user is host of new room
-        users: {}, 
-        waitingUsers: {}, 
-        attendanceLog: [], 
-        screenShareRequest: null 
+      rooms[roomId] = {
+        host: { socketId: socket.id, userId, name }, // Phase 5 structure
+        hostSocketId: socket.id, // Keep for compatibility
+        users: {},
+        waitingUsers: {},
+        attendanceLog: [],
+        screenShareRequest: null
       };
     }
 
     const room = rooms[roomId];
-    console.log("Room Host:", room.hostSocketId);
+    console.log("Room Host:", room.host?.socketId);
 
     // CASE 1: Host Entry
     if (room.hostSocketId === socket.id || Object.keys(room.users).length === 0) {
       room.hostSocketId = socket.id;
+      room.host = { socketId: socket.id, userId, name };
       room.users[socket.id] = {
         socketId: socket.id, userId, name, role: 'host',
         isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
@@ -91,32 +93,32 @@ module.exports = (io, socket) => {
 
     // CASE 2: Approved Participant Entry
     if (joinState === 'approved' || (room.users[socket.id] && room.users[socket.id].role !== 'host')) {
-       room.users[socket.id] = {
-         socketId: socket.id, userId, name, role: 'participant',
-         isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
-       };
-       socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = 'participant';
-       socket.join(roomId);
-       const others = Object.values(room.users)
-         .filter(u => u.socketId !== socket.id)
-         .map(u => ({ socketId: u.socketId, userId: u.userId, name: u.name }));
-       socket.emit('all-users', others);
-       socket.to(roomId).emit('user-joined', { socketId: socket.id, userId, name });
-       broadcastParticipants(io, roomId);
-       console.log(`[Socket] ✅ ${name} entered meeting after approval`);
-       return;
+      room.users[socket.id] = {
+        socketId: socket.id, userId, name, role: 'participant',
+        isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
+      };
+      socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = 'participant';
+      socket.join(roomId);
+      const others = Object.values(room.users)
+        .filter(u => u.socketId !== socket.id)
+        .map(u => ({ socketId: u.socketId, userId: u.userId, name: u.name }));
+      socket.emit('all-users', others);
+      socket.to(roomId).emit('user-joined', { socketId: socket.id, userId, name });
+      broadcastParticipants(io, roomId);
+      console.log(`[Socket] ✅ ${name} entered meeting after approval`);
+      return;
     }
 
     // CASE 3: New Participant (Needs host approval - Phase 2)
     console.log(`[Socket] ⏳ ${name} is waiting for host approval at ${room.hostSocketId}`);
     room.waitingUsers[socket.id] = { socketId: socket.id, userId, name };
-    
+
     io.to(room.hostSocketId).emit('join-request', {
       fromSocketId: socket.id,
-      fromName:     name,
-      fromUserId:   userId
+      fromName: name,
+      fromUserId: userId
     });
-    
+
     socket.emit('waiting-room');
   }
 
@@ -128,7 +130,7 @@ module.exports = (io, socket) => {
     if (!waiter) return;
 
     console.log(`[Socket] ✅ Host approved ${waiter.name}`);
-    room.users[targetSocketId] = { ...waiter, role: 'participant' }; 
+    room.users[targetSocketId] = { ...waiter, role: 'participant' };
     delete room.waitingUsers[targetSocketId];
     io.to(targetSocketId).emit('join-approved', { role: 'participant' });
   });
@@ -242,9 +244,9 @@ module.exports = (io, socket) => {
     }
 
     // Notify all users
-    io.to(roomId).emit('user-screen-share-status', { 
-      socketId: socket.id, 
-      isScreenSharing: isSharing 
+    io.to(roomId).emit('user-screen-share-status', {
+      socketId: socket.id,
+      isScreenSharing: isSharing
     });
 
     broadcastParticipants(io, roomId);
@@ -295,7 +297,7 @@ module.exports = (io, socket) => {
 
     console.log(`[Socket] 🔴 Host ${socket.userName} ending meeting ${roomId}`);
     io.to(roomId).emit('meeting-ended');
-    
+
     // Disconnect all sockets in room
     const socketsInRoom = io.sockets.adapter.rooms.get(roomId);
     if (socketsInRoom) {
@@ -318,7 +320,7 @@ module.exports = (io, socket) => {
     }
 
     console.log(`[Socket] 🔇 Host ${socket.userName} muting all in ${roomId}`);
-    
+
     // Mute all participants in in-memory store
     Object.values(rooms[roomId].users).forEach(user => {
       if (user.role === 'participant') {
@@ -394,10 +396,10 @@ module.exports = (io, socket) => {
     }
 
     console.log(`[Socket] 🚫 Host ${socket.userName} removing ${targetSocketId} from ${roomId}`);
-    
+
     // Notify target user they're being kicked
     io.to(targetSocketId).emit('kicked-from-room');
-    
+
     // Disconnect the target socket
     const targetSocket = io.sockets.sockets.get(targetSocketId);
     if (targetSocket) {
@@ -405,56 +407,54 @@ module.exports = (io, socket) => {
     }
   });
 
-  // 6. SCREEN SHARE PERMISSION REQUEST (PHASE 6)
-  socket.on('request-screen-share', () => {
-    const roomId = socket.roomId;
-    if (!roomId) return;
-
-    console.log(`[Socket] 📺 ${socket.userName} requesting screen share in ${roomId}`);
-    
+  // 6. SCREEN SHARE PERMISSION REQUEST
+  socket.on('request-screen-share', (data) => {
+    const { roomId } = data;
     const room = rooms[roomId];
-    room.screenShareRequest = {
-      fromSocketId: socket.id,
-      fromName: socket.userName,
-      requestedAt: new Date(),
-    };
 
-    // Notify host of screen share request
-    const hostSocket = io.sockets.sockets.get(room.hostSocketId);
-    if (hostSocket) {
-      hostSocket.emit('screen-share-request', {
-        fromSocketId: socket.id,
-        fromName: socket.userName,
-      });
-    }
-  });
+    // MANDATORY DEBUG LOG
+    console.log("Received request:", data);
 
-  // 7. HOST APPROVES SCREEN SHARE
-  socket.on('approve-screen-share', (targetSocketId) => {
-    const roomId = socket.roomId;
-    if (!roomId) return;
+    const host = room?.host;
 
-    // Validate host
-    if (rooms[roomId]?.hostSocketId !== socket.id) {
-      console.warn(`[Socket] 🚫 Non-host tried approve-screen-share`);
+    if (!host) {
+      console.log("Host not found");
       return;
     }
 
-    console.log(`[Socket] ✅ Host approved screen share for ${targetSocketId}`);
-    
-    // Notify the requester they're approved
-    io.to(targetSocketId).emit('screen-share-approved');
-    
-    // Update local tracking
-    if (rooms[roomId].users[targetSocketId]) {
-      rooms[roomId].users[targetSocketId].hasScreenShareApproval = true;
+    console.log("Sending screen request to host:", host.socketId);
+
+    // Notify host of screen share request
+    io.to(host.socketId).emit('screen-share-request', data);
+  });
+
+  // 7. HOST APPROVES SCREEN SHARE
+  socket.on('approve-screen-share', ({ roomId, userId }) => {
+    const rId = roomId || socket.roomId;
+    if (!rId || !rooms[rId]) return;
+
+    const userSocket = [...io.sockets.sockets.values()].find(s => s.userId === userId);
+
+    if (!userSocket) {
+      console.log("User not found for screen share approval");
+      return;
     }
 
-    broadcastParticipants(io, roomId);
+    console.log("Screen share approved for:", userId);
+
+    // Notify the requester they're approved
+    io.to(userSocket.id).emit('screen-share-approved');
+
+    // Update local tracking
+    if (rooms[rId].users[userSocket.id]) {
+      rooms[rId].users[userSocket.id].hasScreenShareApproval = true;
+    }
+
+    broadcastParticipants(io, rId);
   });
 
   // 8. HOST DENIES SCREEN SHARE
-  socket.on('deny-screen-share', (targetSocketId) => {
+  socket.on('deny-screen-share', (userId) => {
     const roomId = socket.roomId;
     if (!roomId) return;
 
@@ -464,15 +464,55 @@ module.exports = (io, socket) => {
       return;
     }
 
-    console.log(`[Socket] ❌ Host denied screen share for ${targetSocketId}`);
-    
-    io.to(targetSocketId).emit('screen-share-denied');
-    rooms[roomId].screenShareRequest = null;
+    const userSocket = [...io.sockets.sockets.values()].find(s => s.userId === userId);
+
+    if (userSocket) {
+      console.log(`[Socket] ❌ Host denied screen share for ${userId}`);
+      io.to(userSocket.id).emit('screen-share-denied');
+    }
+
+    if (rooms[roomId]) {
+      rooms[roomId].screenShareRequest = null;
+    }
   });
 
   // OLD HOST CONTROLS (compatibility, redirects to new)
   socket.on('kick-participant', (targetSocketId) => {
     socket.emit('remove-user', targetSocketId);
+  });
+
+  // ═══════════════════════════════════════════════
+  // AI MONITORING (PHASE 7)
+  // ═══════════════════════════════════════════════
+
+  socket.on('ai-update', (data) => {
+    // data: { userId, roomId, tracker }
+    if (!data.roomId) return;
+
+    // Broadcast to room (specifically to host for dashboard)
+    socket.to(data.roomId).emit('ai-update', { ...data, socketId: socket.id });
+  });
+
+  socket.on('ai-alert', (data) => {
+    // data: { userId, roomId, status, alert, confidence, insights }
+    if (!data.roomId) return;
+
+    socket.to(data.roomId).emit('ai-alert', { ...data, socketId: socket.id });
+  });
+
+  // 9. HOST SENDS WARNING TO PARTICIPANT
+  socket.on('send-warning', ({ targetSocketId, message }) => {
+    const roomId = socket.roomId;
+    if (!roomId) return;
+
+    // Validate host
+    if (rooms[roomId]?.hostSocketId !== socket.id) {
+      console.warn(`[Socket] 🚫 Non-host tried send-warning`);
+      return;
+    }
+
+    console.log(`[Socket] ⚠️ Host warning to ${targetSocketId}: ${message}`);
+    io.to(targetSocketId).emit('host-warning', { message });
   });
 
   // ═══════════════════════════════════════════════
@@ -492,11 +532,11 @@ module.exports = (io, socket) => {
       const leaveTime = new Date();
       const duration = Math.floor((leaveTime - new Date(user.joinedAt)) / 1000);
       room.attendanceLog.push({
-        userId:          user.userId,
-        name:            user.name,
-        role:            user.role,
-        joinTime:        user.joinedAt,
-        leaveTime:       leaveTime,
+        userId: user.userId,
+        name: user.name,
+        role: user.role,
+        joinTime: user.joinedAt,
+        leaveTime: leaveTime,
         durationSeconds: duration > 0 ? duration : 0
       });
     }
@@ -514,12 +554,16 @@ module.exports = (io, socket) => {
       delete rooms[roomId];
     } else if (room.hostSocketId === socket.id) {
       // Host left — promote next person (PHASE 2)
-      const nextSocketId = Object.keys(room.users)[0];
-      room.hostSocketId = nextSocketId;
-      room.users[nextSocketId].role = 'host';
-      io.to(nextSocketId).emit('host-status', true);
-      console.log(`[Socket] 👑 New host promoted: ${nextSocketId}`);
-      broadcastParticipants(io, roomId);
+      const users = Object.values(room.users);
+      if (users.length > 0) {
+        const nextUser = users[0];
+        room.hostSocketId = nextUser.socketId;
+        room.host = { socketId: nextUser.socketId, userId: nextUser.userId, name: nextUser.name };
+        room.users[nextUser.socketId].role = 'host';
+        io.to(nextUser.socketId).emit('host-status', true);
+        console.log(`[Socket] 👑 New host promoted: ${nextUser.name} (${nextUser.socketId})`);
+        broadcastParticipants(io, roomId);
+      }
     } else {
       broadcastParticipants(io, roomId);
     }

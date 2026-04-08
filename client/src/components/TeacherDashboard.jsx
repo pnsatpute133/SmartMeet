@@ -120,7 +120,7 @@ export default function TeacherDashboard({
     return [...participants].map(p => {
       const tracker = allTrackers[p.socketId] || {
         totalTime: 0, attentiveTime: 0, distractedTime: 0,
-        phoneUsageTime: 0, multiplePeopleTime: 0,
+        phoneTime: 0, multiplePeopleTime: 0, drowsyTime: 0,
         engagementScore: 0, warnings: [], summary: '', lastStatus: 'idle',
       };
       const ai = peerAiData[p.socketId] || { status: 'idle', confidence: 0 };
@@ -332,7 +332,7 @@ export default function TeacherDashboard({
                       <TimeBar
                         attentive={t.attentiveTime}
                         distracted={t.distractedTime}
-                        phone={t.phoneUsageTime}
+                        phone={t.phoneTime}
                         multiPeople={t.multiplePeopleTime}
                         total={total}
                       />
@@ -340,7 +340,7 @@ export default function TeacherDashboard({
                         {[
                           { c: '#22c55e', v: t.attentiveTime,      label: 'Att' },
                           { c: '#f59e0b', v: t.distractedTime,     label: 'Dis' },
-                          { c: '#ef4444', v: t.phoneUsageTime,     label: 'Ph' },
+                          { c: '#ef4444', v: t.phoneTime,          label: 'Ph' },
                         ].map(({ c, v, label }) => (
                           <span key={label} style={{ color: c, fontSize: '9px', fontWeight: 700 }}>
                             {label} {Math.round((v / total) * 100)}%
@@ -402,7 +402,7 @@ export default function TeacherDashboard({
                         {[
                           { label: 'Attentive',  val: t.attentiveTime,  color: '#22c55e' },
                           { label: 'Distracted', val: t.distractedTime, color: '#f59e0b' },
-                          { label: 'Phone',      val: t.phoneUsageTime, color: '#ef4444' },
+                          { label: 'Phone',      val: t.phoneTime, color: '#ef4444' },
                         ].map(({ label, val, color }) => (
                           <div key={label} style={{ textAlign: 'center' }}>
                             <div style={{ color, fontSize: '16px', fontWeight: 800 }}>{fmt(val)}</div>
