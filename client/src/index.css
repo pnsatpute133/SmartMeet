@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-white font-sans antialiased;
+  }
+}
+
+/* Scrollbar styles for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-dark-bg; 
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-dark-surface rounded-full; 
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-dark-border; 
+}
+
+/* Remove default blue outline on focus, replace with custom ring */
+*:focus-visible {
+  outline: none;
+  @apply ring-2 ring-brand-blue ring-opacity-50;
+}

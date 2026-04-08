@@ -1,0 +1,9 @@
+﻿[dotenv@17.3.1] injecting env (3) from .env -- tip: ΓÜÖ∩╕Å  suppress all logs with { quiet: true }
+Connecting to MongoDB at: mongodb://localhost:27017/smartmeet
+Connected to MongoDB.
+Clearing old data...
+Inserting users...
+Inserted Users: [ 'alice@example.com', 'bob@example.com', 'charlie@example.com' ]
+Inserting meetings...
+Inserted Meeting ID: abc-defg-hij
+Seed completed successfully!

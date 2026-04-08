@@ -1,0 +1,8 @@
+﻿[dotenv@17.3.1] injecting env (3) from .env -- tip: ΓÜÖ∩╕Å  suppress all logs with { quiet: true }
+Connecting to mongodb://localhost:27017/smartmeet
+Users found in db: 3
+[
+  { email: 'alice@example.com', name: 'Alice Smith' },
+  { email: 'bob@example.com', name: 'Bob Jones' },
+  { email: 'charlie@example.com', name: 'Charlie Developer' }
+]
