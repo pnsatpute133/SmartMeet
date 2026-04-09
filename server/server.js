@@ -21,11 +21,11 @@ const meetingHandlers = require('./socketControllers/meetingHandlers');
 const app = express();
 const server = http.createServer(app);
 
-// Enable CORS for all routes and origins
+// Enable CORS
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 

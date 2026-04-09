@@ -588,17 +588,15 @@ module.exports = (io, socket) => {
   // 9. HOST SENDS WARNING TO PARTICIPANT
   socket.on('send-warning', ({ targetSocketId, message }) => {
     const roomId = socket.roomId;
-    if (!roomId) return;
-
-    // Validate host
-    if (rooms[roomId]?.hostSocketId !== socket.id) {
-      console.warn(`[Socket] 🚫 Non-host tried send-warning`);
-      return;
-    }
-
-    console.log(`[Socket] ⚠️ Host warning to ${targetSocketId}: ${message}`);
-    dbg('Warning', `host=${socket.userName} | target=${targetSocketId} | msg="${message}"`);
+    if (rooms[roomId]?.hostSocketId !== socket.id) return;
     io.to(targetSocketId).emit('host-warning', { message });
+  });
+
+  // 10. HOST TOGGLES AI FOR ROOM
+  socket.on('set-ai-status', ({ roomId, enabled }) => {
+    if (!rooms[roomId] || rooms[roomId].hostSocketId !== socket.id) return;
+    dbg('AI', `Host ${socket.userName} setting room AI to: ${enabled}`);
+    io.to(roomId).emit('ai-status-update', { enabled });
   });
 
   // ═══════════════════════════════════════════════

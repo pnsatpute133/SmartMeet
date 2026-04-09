@@ -59,29 +59,31 @@ router.post('/register', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    console.log('Login body:', req.body);
     const { email, password } = req.body;
-    dbg('login', `Attempt: email=${email}`);
+    dbg('login', `Login attempt for email: ${email}`);
 
     if (!email || !password) {
+      dbg('login', '❌ Missing email or password');
       return res.status(400).json({ message: 'Please provide email and password' });
     }
 
     const user = await User.findOne({ email });
     if (!user) {
-      dbg('login', `❌ User not found: ${email}`);
+      dbg('login', `❌ User not found with email: ${email}`);
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    dbg('login', `User found: ${user._id} | Comparing password...`);
+    dbg('login', `User found, comparing passwords...`);
     const isMatch = await bcrypt.compare(password, user.password);
+    
     if (isMatch) {
-      dbg('login', `✅ Login success: ${email}`);
+      dbg('login', `✅ Login successful for: ${email}`);
+      const token = generateToken(user._id);
       res.json({
         _id: user._id,
         name: user.name,
         email: user.email,
-        token: generateToken(user._id),
+        token,
       });
     } else {
       dbg('login', `❌ Password mismatch for: ${email}`);
@@ -89,8 +91,7 @@ router.post('/login', async (req, res) => {
     }
   } catch (error) {
     console.error('Login error:', error);
-    dbg('login', '❌ Error:', error.message);
-    res.status(500).json({ message: error.message || 'Login failed due to server error' });
+    res.status(500).json({ message: 'Login failed due to server error' });
   }
 });
 

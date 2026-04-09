@@ -105,9 +105,11 @@ export default function MeetingRoom() {
   });
 
   const handleToggleAI = useCallback(() => {
-    console.log('[MeetingRoom] 🧠 Toggling AI monitoring:', !aiEnabled);
-    setAiEnabled(prev => !prev);
-  }, [aiEnabled]);
+    const newState = !aiEnabled;
+    console.log('[MeetingRoom] 🧠 Toggling AI monitoring:', newState);
+    setAiEnabled(newState);
+    socket?.emit('set-ai-status', { roomId, enabled: newState });
+  }, [aiEnabled, socket, roomId]);
 
   // ── Local UI State ─────────────────────────────────────────
   const [meetingTime, setMeetingTime]         = useState('00:00');
@@ -139,6 +141,16 @@ export default function MeetingRoom() {
       resetMeetingState();
     };
   }, [roomId, setMeetingId, resetMeetingState, navigate]);
+
+  // ── Sync AI status from host ───────────────────────────────
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('ai-status-update', ({ enabled }) => {
+      console.log(`[MeetingRoom] 🤖 AI Monitoring ${enabled ? 'ENABLED' : 'DISABLED'} by host`);
+      setAiEnabled(enabled);
+    });
+    return () => socket.off('ai-status-update');
+  }, [socket]);
 
   // ── Sync media tracks with toggle state ───────────────────
   useEffect(() => {
