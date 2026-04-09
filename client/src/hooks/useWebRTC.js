@@ -14,6 +14,7 @@ export default function useWebRTC(roomId, user) {
   const socketRef = useRef(null);
   const peersRef  = useRef({});   // { socketId: RTCPeerConnection }
   const streamRef = useRef(null); // always holds latest stream
+  const pendingCandidates = useRef({}); // { socketId: RTCIceCandidateInit[] }
 
   const {
     addParticipant,
@@ -29,9 +30,10 @@ export default function useWebRTC(roomId, user) {
     participants, // Added for debugging phase 8
   } = useMeetingStore();
 
-  const [joinState, setJoinState]       = useState('idle'); // 'idle' | 'waiting' | 'approved' | 'rejected'
-  const [joinRequests, setJoinRequests] = useState([]);    // { socketId, fromName, fromUserId }
-  const isJoinedRef = useRef(false); // PHASE 7: Prevent re-join issue
+  const [joinState, setJoinState]           = useState('idle');
+  const [joinRequests, setJoinRequests]     = useState([]);
+  const [screenShareRequest, setScreenShareRequestLocal] = useState(null); // local mirror
+  const isJoinedRef = useRef(false);
 
   // ─────────────────────────────────────────────────────────────
   // Active-speaker detection via AudioContext
@@ -58,97 +60,143 @@ export default function useWebRTC(roomId, user) {
   }, [setActiveSpeaker]);
 
   // ─────────────────────────────────────────────────────────────
-  // create RTCPeerConnection and initiate offer to a remote socketId
+  // Per-peer negotiation flags  (Perfect Negotiation pattern)
+  // ─────────────────────────────────────────────────────────────
+  const makingOffer  = useRef({}); // { socketId: bool }
+  const ignoreOffer  = useRef({}); // { socketId: bool }
+  const isSettingRemoteAnswerPending = useRef({}); // { socketId: bool }
+
+  // ─────────────────────────────────────────────────────────────
+  // Create / retrieve a RTCPeerConnection for a remote socketId.
+  // Implements MDN "Perfect Negotiation" to survive offer collisions.
+  // ─────────────────────────────────────────────────────────────
+  function getOrCreatePeer(remoteSocketId) {
+    if (peersRef.current[remoteSocketId]) return peersRef.current[remoteSocketId];
+
+    console.log('[WebRTC] 🔗 Creating peer for:', remoteSocketId);
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    });
+
+    const remoteStream = new MediaStream();
+    setPeerStreams(prev => ({ ...prev, [remoteSocketId]: remoteStream }));
+
+    pc.ontrack = (evt) => {
+      console.log(`[WebRTC] 📹 Remote track from: ${remoteSocketId}`);
+      evt.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
+      detectActiveSpeaker(remoteStream, remoteSocketId);
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) {
+        socketRef.current?.emit('ice-candidate', { toId: remoteSocketId, candidate });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Connection [${remoteSocketId}]:`, pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        console.warn('[WebRTC] Connection failed, restarting ICE for', remoteSocketId);
+        pc.restartIce?.();
+      }
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log(`[WebRTC] Signaling [${remoteSocketId}]:`, pc.signalingState);
+    };
+
+    // Perfect Negotiation — re-negotiate when needed
+    pc.onnegotiationneeded = async () => {
+      try {
+        makingOffer.current[remoteSocketId] = true;
+        await pc.setLocalDescription();  // browser auto-creates offer
+        console.log('[WebRTC] 📤 Sending offer to:', remoteSocketId);
+        socketRef.current?.emit('offer', { toId: remoteSocketId, sdp: pc.localDescription });
+      } catch (err) {
+        console.error('[WebRTC] onnegotiationneeded error:', err);
+      } finally {
+        makingOffer.current[remoteSocketId] = false;
+      }
+    };
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current));
+    }
+
+    peersRef.current[remoteSocketId] = pc;
+    if (!pendingCandidates.current[remoteSocketId]) {
+      pendingCandidates.current[remoteSocketId] = [];
+    }
+    return pc;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Kept for backward compat — now delegates to getOrCreatePeer
   // ─────────────────────────────────────────────────────────────
   function createPeerConnectionAndOffer(toSocketId) {
-    console.log("Creating peer for:", toSocketId);
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ]
-    });
-
-    const remoteStream = new MediaStream();
-    setPeerStreams(prev => ({ ...prev, [toSocketId]: remoteStream }));
-
-    pc.ontrack = (evt) => {
-      console.log(`[WebRTC] 📹 Received remote track from: ${toSocketId}`);
-      evt.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
-      detectActiveSpeaker(remoteStream, toSocketId);
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("ICE candidate (sent) ->", toSocketId);
-        socketRef.current?.emit('ice-candidate', { toId: toSocketId, candidate: event.candidate });
-      }
-    };
-
-    if (streamRef.current) {
-      console.log(`[WebRTC] Adding local tracks to peer ${toSocketId}`);
-      streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current));
-    }
-
-    peersRef.current[toSocketId] = pc;
-
-    pc.createOffer()
-      .then(offer => pc.setLocalDescription(offer).then(() => offer))
-      .then(offer => {
-        console.log("Sending offer to:", toSocketId);
-        socketRef.current?.emit('offer', { toId: toSocketId, sdp: offer });
-      })
-      .catch(err => console.error('[WebRTC] Offer error:', err));
-
-    return pc;
+    getOrCreatePeer(toSocketId); // onnegotiationneeded fires automatically after addTrack
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Create RTCPeerConnection and answer an incoming offer
-  // ─────────────────────────────────────────────────────────────
   function createPeerConnectionAndAnswer(fromSocketId, offerSdp) {
-    console.log("Creating peer for (answer):", fromSocketId);
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ]
-    });
+    // Handled by the offer socket handler using Perfect Negotiation
+    handleIncomingOffer(fromSocketId, offerSdp);
+  }
 
-    const remoteStream = new MediaStream();
-    setPeerStreams(prev => ({ ...prev, [fromSocketId]: remoteStream }));
+  async function handleIncomingOffer(fromSocketId, offerSdp) {
+    const pc = getOrCreatePeer(fromSocketId);
 
-    pc.ontrack = (evt) => {
-      console.log(`[WebRTC] 📹 Received remote track from: ${fromSocketId}`);
-      evt.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
-      detectActiveSpeaker(remoteStream, fromSocketId);
-    };
+    // Determine politeness: the socket with the lexicographically smaller ID is polite
+    const myId = socketRef.current?.id || '';
+    const polite = myId < fromSocketId;
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("ICE candidate (sent) ->", fromSocketId);
-        socketRef.current?.emit('ice-candidate', { toId: fromSocketId, candidate: event.candidate });
-      }
-    };
+    const offerCollision =
+      (offerSdp.type === 'offer') &&
+      (makingOffer.current[fromSocketId] || pc.signalingState !== 'stable');
 
-    if (streamRef.current) {
-      console.log(`[WebRTC] Adding local tracks to peer ${fromSocketId}`);
-      streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current));
+    ignoreOffer.current[fromSocketId] = !polite && offerCollision;
+
+    if (ignoreOffer.current[fromSocketId]) {
+      console.log('[WebRTC] 🚦 Offer collision — impolite side handled (ignored) offer from', fromSocketId);
+      return;
     }
 
-    peersRef.current[fromSocketId] = pc;
+    try {
+      if (offerCollision) {
+        // Polite side: rollback own offer, then accept theirs
+        await Promise.all([
+          pc.setLocalDescription({ type: 'rollback' }),
+          pc.setRemoteDescription(new RTCSessionDescription(offerSdp)),
+        ]);
+      } else {
+        await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
+      }
 
-    pc.setRemoteDescription(new RTCSessionDescription(offerSdp))
-      .then(() => pc.createAnswer())
-      .then(answer => pc.setLocalDescription(answer).then(() => answer))
-      .then(answer => {
-        console.log("Sending answer to:", fromSocketId);
-        socketRef.current?.emit('answer', { toId: fromSocketId, sdp: answer });
-      })
-      .catch(err => console.error('[WebRTC] Answer error:', err));
+      // Flush any buffered ICE candidates
+      const queued = pendingCandidates.current[fromSocketId] || [];
+      if (queued.length > 0) {
+        console.log(`[WebRTC] Flushing ${queued.length} buffered ICE candidates for`, fromSocketId);
+        for (const c of queued) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(e =>
+            console.warn('[WebRTC] Buffered ICE error:', e)
+          );
+        }
+        pendingCandidates.current[fromSocketId] = [];
+      }
 
-    return pc;
+      if (offerSdp.type === 'offer') {
+        await pc.setLocalDescription();  // browser auto-creates answer
+        console.log('[WebRTC] 📤 Sending answer to:', fromSocketId);
+        socketRef.current?.emit('answer', { toId: fromSocketId, sdp: pc.localDescription });
+      }
+    } catch (err) {
+      console.error('[WebRTC] handleIncomingOffer error:', err);
+    }
   }
+
 
   // ─────────────────────────────────────────────────────────────
   // Cleanup a single peer
@@ -156,6 +204,10 @@ export default function useWebRTC(roomId, user) {
   function cleanupPeer(socketId) {
     try { peersRef.current[socketId]?.close?.(); } catch { /* ignore */ }
     delete peersRef.current[socketId];
+    delete pendingCandidates.current[socketId];
+    delete makingOffer.current[socketId];
+    delete ignoreOffer.current[socketId];
+    delete isSettingRemoteAnswerPending.current[socketId];
     setPeerStreams(prev => {
       const next = { ...prev };
       delete next[socketId];
@@ -250,24 +302,59 @@ export default function useWebRTC(roomId, user) {
 
     // ── EVENT: Incoming offer from a remote peer ───────────
     sock.on('offer', ({ sdp, fromId }) => {
-      console.log("Received offer from:", fromId);
-      if (peersRef.current[fromId]) {
-        console.warn('[WebRTC] offer received but peer exists, overwriting:', fromId);
-      }
+      console.log('[WebRTC] 📨 Received offer from:', fromId);
       createPeerConnectionAndAnswer(fromId, sdp);
     });
 
     sock.on('answer', ({ sdp, fromId }) => {
-      console.log("Received answer from:", fromId);
       const pc = peersRef.current[fromId];
-      if (pc) pc.setRemoteDescription(new RTCSessionDescription(sdp)).catch(e => console.error(e));
+      if (!pc) {
+        console.warn('[WebRTC] answer: no peer found for', fromId);
+        return;
+      }
+      // Perfect Negotiation: ignore answer if we ignored the offer
+      if (ignoreOffer.current[fromId]) {
+        console.log('[WebRTC] 📋 Ignoring answer from', fromId, '(it belongs to an ignored collision offer)');
+        return;
+      }
+      // Only apply answer when waiting for one
+      if (pc.signalingState !== 'have-local-offer') {
+        console.warn(`[WebRTC] ⚠️ Ignoring answer from ${fromId} — state: ${pc.signalingState}`);
+        return;
+      }
+      console.log('[WebRTC] ✅ Applying answer from:', fromId);
+      pc.setRemoteDescription(new RTCSessionDescription(sdp))
+        .then(() => {
+          // Flush any ICE candidates buffered while waiting for answer
+          const queued = pendingCandidates.current[fromId] || [];
+          if (queued.length > 0) {
+            console.log(`[WebRTC] Flushing ${queued.length} post-answer ICE candidates for`, fromId);
+            queued.forEach(c =>
+              pc.addIceCandidate(new RTCIceCandidate(c)).catch(e => console.warn('[WebRTC] ICE flush error:', e))
+            );
+            pendingCandidates.current[fromId] = [];
+          }
+        })
+        .catch(e => console.error('[WebRTC] setRemoteDescription(answer) error:', e));
     });
 
     // ── EVENT: ICE candidate ───────────────────────────────
     sock.on('ice-candidate', ({ candidate, fromId }) => {
-      console.log("ICE candidate (received) from:", fromId);
       const pc = peersRef.current[fromId];
-      if (pc && candidate) pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error(e));
+      if (!pc || !candidate) return;
+
+      // Guard: only add candidate once remote description is set
+      if (pc.remoteDescription && pc.remoteDescription.type) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate))
+          .catch(e => console.warn('[WebRTC] addIceCandidate error:', e));
+      } else {
+        // Queue the candidate until remote description is set
+        if (!pendingCandidates.current[fromId]) {
+          pendingCandidates.current[fromId] = [];
+        }
+        pendingCandidates.current[fromId].push(candidate);
+        console.log(`[WebRTC] 📦 Buffered ICE candidate for ${fromId} (remote desc not ready yet)`);
+      }
     });
 
     // ─────────────────────────────────────────────────────────
@@ -355,21 +442,14 @@ export default function useWebRTC(roomId, user) {
     });
 
     // PHASE 8: Host receives screen share request
-    sock.on('screen-share-request', (user) => {
-      // MANDATORY DEBUG LOG
-      console.log("Received on host");
-      console.log("Host received screen request:", user);
-      
-      setScreenShareRequest({ 
-        userId: user.userId, 
-        name: user.name 
-      });
+    sock.on('screen-share-request', (data) => {
+      console.log('[WebRTC] 📺 Host received screen-share-request:', data);
+      const req = { userId: data.userId, name: data.name };
+      setScreenShareRequest(req);      // update Zustand store
+      setScreenShareRequestLocal(req); // update local state (used in return)
     });
 
-    // PHASE 8: Screen share approval
     sock.on('screen-share-approved', () => {
-      // MANDATORY DEBUG LOG
-      console.log("Approved! Starting screen share");
       console.log('[Socket] ✅ Screen share approved by host');
       setScreenShareApproval(true);
     });
@@ -377,6 +457,7 @@ export default function useWebRTC(roomId, user) {
     sock.on('screen-share-denied', () => {
       console.log('[Socket] ❌ Screen share denied by host');
       setScreenShareApproval(false);
+      setScreenShareRequestLocal(null);
       alert('Host denied your screen share request.');
     });
 
@@ -526,12 +607,14 @@ export default function useWebRTC(roomId, user) {
       roomId,
       userId 
     });
+    setScreenShareRequestLocal(null); // Clear local mirror to close popup
   }, [roomId]);
 
   // PHASE 6: Deny screen share
   const denyScreenShare = useCallback((userId) => {
     console.log('[WebRTC] ❌ Denying screen share for:', userId);
     socketRef.current?.emit('deny-screen-share', userId);
+    setScreenShareRequestLocal(null); // Clear local mirror to close popup
   }, []);
 
   const updateMediaState = useCallback((isMuted, isVideoOff) => {
@@ -678,6 +761,9 @@ export default function useWebRTC(roomId, user) {
     socket,
     joinState,
     joinRequests,
+    screenShareRequest: screenShareRequest !== undefined
+      ? screenShareRequest   // from local state (always fresh)
+      : null,
     // actions
     sendMessage,
     sendReaction,

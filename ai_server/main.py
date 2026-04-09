@@ -36,8 +36,22 @@ except (ImportError, AttributeError, Exception) as _mp_err:
 # ── YOLO ──────────────────────────────────────────────────────────────────
 from ultralytics import YOLO
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s.%(msecs)03d [%(levelname)-8s] [%(name)s] %(message)s',
+    datefmt='%H:%M:%S',
+)
 logger = logging.getLogger("smartmeet-ai")
+# Silence noisy third-party loggers
+logging.getLogger("ultralytics").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("multipart").setLevel(logging.WARNING)
+
+# Log MediaPipe status after logger is ready
+if MEDIAPIPE_OK:
+    logger.info("[AI] ✅ MediaPipe FaceMesh loaded successfully")
+else:
+    logger.warning("[AI] ⚠️ MediaPipe not available — head-pose features disabled")
 
 app = FastAPI(title="SmartMeet AI Server", version="2.1.0")
 
@@ -100,12 +114,17 @@ class DetectionResult(BaseModel):
 @app.on_event("startup")
 async def load_model():
     global yolo_model
-    logger.info("[AI] Loading YOLOv11 model …")
+    logger.info("[AI] 🚀 SmartMeet AI Server starting up...")
+    logger.info(f"[AI] MediaPipe available: {MEDIAPIPE_OK}")
+    logger.info(f"[AI] Loading YOLOv11 model from: {MODEL_PATH}")
+    t0 = time.time()
     yolo_model = YOLO(MODEL_PATH)
     # warm-up pass
     dummy = np.zeros((480, 640, 3), dtype=np.uint8)
     yolo_model(dummy, verbose=False)
-    logger.info("[AI] ✅ YOLOv11 model ready")
+    elapsed = round(time.time() - t0, 2)
+    logger.info(f"[AI] ✅ YOLOv11 model ready (loaded in {elapsed}s)")
+    logger.info(f"[AI] 📊 History window: {HISTORY_WINDOW_SEC}s | Capture interval: set by client")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -118,7 +137,9 @@ def b64_to_cv2(b64_str: str) -> np.ndarray:
     arr = np.frombuffer(buf, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
+        logger.error("[AI] ❌ b64_to_cv2: could not decode image (imdecode returned None)")
         raise ValueError("Could not decode image")
+    logger.debug(f"[AI] 🖼️ Frame decoded: shape={img.shape} | b64_len={len(b64_str)}")
     return img
 
 
@@ -145,12 +166,14 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
     - Posture (Vertical deviation)
     """
     if not MEDIAPIPE_OK:
+        logger.debug("[AI] MediaPipe unavailable, returning defaults")
         return {"yaw": 0.0, "pitch": 0.0, "facing_forward": True, "ear": 0.3, "mar": 0.0, "is_drowsy": False, "posture_score": 100}
 
     h, w = img_rgb.shape[:2]
     results = face_mesh_solver.process(img_rgb)
     
     if not results.multi_face_landmarks:
+        logger.debug("[AI] No face landmarks found by MediaPipe")
         return {"yaw": 0.0, "pitch": 0.0, "facing_forward": False, "ear": 0.0, "mar": 0.0, "is_drowsy": False, "posture_score": 0}
 
     lm = results.multi_face_landmarks[0].landmark
@@ -191,7 +214,7 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
     if nose_y_norm > 0.65: # Head is too low
         posture_score = max(0, 100 - int((nose_y_norm - 0.65) * 400))
 
-    return {
+    features = {
         "yaw": round(yaw, 1),
         "pitch": round(pitch, 1),
         "facing_forward": facing_forward,
@@ -202,6 +225,12 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
         "posture_score": posture_score,
         "slumping": posture_score < 70
     }
+    logger.debug(
+        f"[AI] MediaPipe: yaw={features['yaw']}° pitch={features['pitch']}° "
+        f"ear={features['ear']} mar={features['mar']} "
+        f"facing={features['facing_forward']} drowsy={features['is_drowsy']} speaking={features['is_speaking']}"
+    )
+    return features
 
 
 def classify_behaviour(
@@ -216,30 +245,40 @@ def classify_behaviour(
     Priority-based behavior classification.
     """
     if person_count == 0:
+        logger.debug("[Classify] status=no_face")
         return "no_face", "⚠️ No face detected", 0.5
 
     if person_count > 1:
+        logger.debug(f"[Classify] status=multiple_people | count={person_count}")
         return "multiple_people", "🚨 Unauthorized person", 0.98
 
     if phone_detected:
+        logger.debug("[Classify] status=phone")
         return "phone", "Stop using phone", 0.95
 
     if advanced.get("is_drowsy"):
+        logger.debug(f"[Classify] status=drowsy | EAR={advanced.get('ear')}")
         return "drowsy", "Stay alert", 0.90
 
     if advanced.get("slumping"):
+        logger.debug(f"[Classify] status=poor_posture | score={advanced.get('posture_score')}")
         return "poor_posture", "Sit straight", 0.80
 
     if not advanced.get("facing_forward"):
+        logger.debug(f"[Classify] status=distracted | yaw={advanced.get('yaw')} pitch={advanced.get('pitch')}")
         return "distracted", "Pay attention", 0.82
 
     if advanced.get("is_speaking") and is_muted:
+        logger.debug("[Classify] status=speaking_muted")
         return "speaking_muted", "You are speaking while muted", 0.85
     
     if advanced.get("is_speaking"):
+        logger.debug("[Classify] status=speaking")
         return "speaking", None, 0.90
 
-    return "attentive", None, min(0.70 + yolo_conf * 0.30, 0.99)
+    conf = min(0.70 + yolo_conf * 0.30, 0.99)
+    logger.debug(f"[Classify] status=attentive | conf={conf:.3f}")
+    return "attentive", None, conf
 
 
 def get_agentic_insights(user_id: str) -> dict:
@@ -251,6 +290,7 @@ def get_agentic_insights(user_id: str) -> dict:
     window = [(ts, st) for ts, st in history if now - ts < HISTORY_WINDOW_SEC]
 
     if not window:
+        logger.debug(f"[Insights] No history for userId={user_id}")
         return {"summary": "Initializing...", "engagement_score": 0, "suggestions": [], "timeline": []}
 
     counts = defaultdict(int)
@@ -273,6 +313,10 @@ def get_agentic_insights(user_id: str) -> dict:
     if counts["speaking_muted"] > 3: suggestions.append("Student keeps trying to talk while muted.")
 
     dominant = max(counts, key=counts.get) if counts else "unknown"
+    logger.debug(
+        f"[Insights] userId={user_id} | score={score} | dominant={dominant} "
+        f"| attentive={att_sec}s dist={dist_sec}s drowsy={drowsy_sec}s | window={total} samples"
+    )
     
     return {
         "summary": f"Engagement: {score}%. Tone: {dominant}.",
@@ -288,24 +332,33 @@ def get_agentic_insights(user_id: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 @app.post("/detect", response_model=DetectionResult)
 async def detect(req: FrameRequest):
+    t_start = time.time()
+    logger.debug(f"[/detect] → userId={req.userId} | roomId={req.roomId} | isMuted={req.isMuted} | ts={req.ts}")
+
     if yolo_model is None:
+        logger.error("[/detect] YOLO model not loaded yet!")
         raise HTTPException(503, "Model loading...")
 
     try:
         img_bgr = b64_to_cv2(req.frame)
     except Exception as e:
+        logger.error(f"[/detect] Frame decode failed: {e}")
         raise HTTPException(400, f"Bad frame: {e}")
 
     # Process frame
     h, w = img_bgr.shape[:2]
+    orig_size = (w, h)
     if w > 640:
         scale = 640 / w
         img_bgr = cv2.resize(img_bgr, (640, int(h * scale)))
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    logger.debug(f"[/detect] Frame: orig={orig_size} resized={img_bgr.shape[:2][::-1]}")
 
     # 1. YOLO Inference
+    t_yolo = time.time()
     results = yolo_model(img_bgr, verbose=False, conf=0.30)[0]
     boxes   = results.boxes
+    logger.debug(f"[/detect] YOLO done in {round((time.time()-t_yolo)*1000)}ms | detections={len(boxes)}")
 
     person_count    = 0
     phone_detected  = False
@@ -315,6 +368,8 @@ async def detect(req: FrameRequest):
     for box in boxes:
         cls  = int(box.cls[0])
         conf = float(box.conf[0])
+        label = results.names[cls]
+        logger.debug(f"[YOLO] box: class={cls}({label}) conf={conf:.2f}")
         if cls == PERSON_CLASS:
             person_count += 1
             max_yolo_conf = max(max_yolo_conf, conf)
@@ -323,16 +378,29 @@ async def detect(req: FrameRequest):
         elif cls == LAPTOP_CLASS:
             laptop_detected = True
 
+    logger.debug(
+        f"[/detect] YOLO summary: persons={person_count} "
+        f"phone={phone_detected} laptop={laptop_detected} max_conf={max_yolo_conf:.2f}"
+    )
+
     # 2. MediaPipe Features
+    t_mp = time.time()
     advanced = estimate_advanced_features(img_rgb)
+    logger.debug(f"[/detect] MediaPipe done in {round((time.time()-t_mp)*1000)}ms")
 
     # 3. Behavior Logic
     status, alert, confidence = classify_behaviour(
         person_count, phone_detected, laptop_detected, advanced, req.isMuted, max_yolo_conf
     )
+    logger.info(
+        f"[/detect] ✅ userId={req.userId} | status=\033[1m{status}\033[0m "
+        f"conf={confidence:.2f} | alert={alert!r} | "
+        f"total_ms={round((time.time()-t_start)*1000)}"
+    )
 
     # 4. Agentic Logic
     behaviour_history[req.userId].append((time.time(), status))
+    logger.debug(f"[/detect] History for {req.userId}: {len(behaviour_history[req.userId])} entries")
     insights = get_agentic_insights(req.userId)
 
     return DetectionResult(
@@ -353,12 +421,22 @@ async def detect(req: FrameRequest):
 
 @app.get("/insights/{userId}")
 async def insights(userId: str):
+    logger.debug(f"[/insights] userId={userId} | history_len={len(behaviour_history.get(userId, []))}")
     return get_agentic_insights(userId)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "users": len(behaviour_history)}
+    tracked_users = len(behaviour_history)
+    model_status = "loaded" if yolo_model is not None else "not_loaded"
+    mediapipe_status = "ok" if MEDIAPIPE_OK else "unavailable"
+    logger.debug(f"[/health] model={model_status} | mediapipe={mediapipe_status} | tracked_users={tracked_users}")
+    return {
+        "status": "ok",
+        "model": model_status,
+        "mediapipe": mediapipe_status,
+        "users": tracked_users,
+    }
 
 
 if __name__ == "__main__":

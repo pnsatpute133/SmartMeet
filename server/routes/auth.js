@@ -2,8 +2,14 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const router = express.Router();
-
 const bcrypt = require('bcryptjs');
+
+const DEBUG = true;
+function dbg(tag, ...args) {
+  if (!DEBUG) return;
+  const ts = new Date().toISOString().substring(11, 23);
+  console.log(`[${ts}] [DEBUG][Auth/${tag}]`, ...args);
+}
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET || 'smartmeet_fallback_secret', {
@@ -15,13 +21,16 @@ router.post('/register', async (req, res) => {
   try {
     console.log('Signup body:', req.body);
     const { name, email, password } = req.body;
+    dbg('register', `Attempt: name=${name} | email=${email}`);
     
     if (!name || !email || !password) {
+      dbg('register', '❌ Missing required fields');
       return res.status(400).json({ message: 'Please provide all required fields' });
     }
 
     const userExists = await User.findOne({ email });
     if (userExists) {
+      dbg('register', `❌ Email already taken: ${email}`);
       return res.status(400).json({ message: 'User already exists' });
     }
 
@@ -34,6 +43,7 @@ router.post('/register', async (req, res) => {
       password: hashedPassword 
     });
 
+    dbg('register', `✅ User created: ${user._id} | email=${email}`);
     res.status(201).json({
       _id: user._id,
       name: user.name,
@@ -42,6 +52,7 @@ router.post('/register', async (req, res) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
+    dbg('register', '❌ Error:', error.message);
     res.status(500).json({ message: error.message || 'Registration failed due to server error' });
   }
 });
@@ -50,6 +61,7 @@ router.post('/login', async (req, res) => {
   try {
     console.log('Login body:', req.body);
     const { email, password } = req.body;
+    dbg('login', `Attempt: email=${email}`);
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Please provide email and password' });
@@ -57,11 +69,14 @@ router.post('/login', async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
+      dbg('login', `❌ User not found: ${email}`);
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
+    dbg('login', `User found: ${user._id} | Comparing password...`);
     const isMatch = await bcrypt.compare(password, user.password);
     if (isMatch) {
+      dbg('login', `✅ Login success: ${email}`);
       res.json({
         _id: user._id,
         name: user.name,
@@ -69,10 +84,12 @@ router.post('/login', async (req, res) => {
         token: generateToken(user._id),
       });
     } else {
+      dbg('login', `❌ Password mismatch for: ${email}`);
       res.status(401).json({ message: 'Invalid email or password' });
     }
   } catch (error) {
     console.error('Login error:', error);
+    dbg('login', '❌ Error:', error.message);
     res.status(500).json({ message: error.message || 'Login failed due to server error' });
   }
 });

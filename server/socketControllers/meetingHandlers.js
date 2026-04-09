@@ -1,6 +1,25 @@
 const Meeting = require('../models/Meeting');
 const Message = require('../models/Message');
 
+// ── Debug Logger ──────────────────────────────────────────────────────────
+const DEBUG = true;
+function dbg(tag, ...args) {
+  if (!DEBUG) return;
+  const ts = new Date().toISOString().substring(11, 23);
+  console.log(`[${ts}] [DEBUG][${tag}]`, ...args);
+}
+function roomSnap(roomId) {
+  if (!rooms[roomId]) return { error: 'room not found' };
+  const r = rooms[roomId];
+  return {
+    host: r.host?.name,
+    userCount: Object.keys(r.users).length,
+    waitingCount: Object.keys(r.waitingUsers).length,
+    users: Object.values(r.users).map(u => `${u.name}(${u.role})`),
+    waiting: Object.values(r.waitingUsers).map(u => u.name),
+  };
+}
+
 // In-memory room state — survives individual socket disconnects
 // Structure: roomId -> { 
 //   hostSocketId, 
@@ -12,6 +31,8 @@ const rooms = {};
 // Helper: Save final report to DB (Attendance + AI Summary)
 async function saveFinalReport(roomId, roomData) {
   try {
+    dbg('DB', `Saving final report for room: ${roomId}`);
+    dbg('DB', `Attendance records: ${roomData.attendanceLog?.length || 0}`);
     const MeetingReport = require('../models/MeetingReport');
     await MeetingReport.findOneAndUpdate(
       { meetingId: roomId },
@@ -27,6 +48,7 @@ async function saveFinalReport(roomId, roomData) {
     console.log(`[Database] ✅ Final attendance saved for ${roomId}`);
   } catch (err) {
     console.error('[Database] ❌ Report save error:', err.message);
+    dbg('DB', 'Full error:', err);
   }
 }
 
@@ -43,6 +65,7 @@ function broadcastParticipants(io, roomId) {
     isScreenSharing: u.isScreenSharing || false,
     joinedAt: u.joinedAt,
   }));
+  dbg('Broadcast', `participants-update to room ${roomId}: ${users.length} users`);
   io.to(roomId).emit('participants-update', users);
 }
 
@@ -56,11 +79,16 @@ module.exports = (io, socket) => {
   socket.on('request-join', handleJoin);
 
   async function handleJoin({ roomId, userId, name, joinState }) {
-    if (!roomId || !userId || !name) return;
+    if (!roomId || !userId || !name) {
+      dbg('Join', `❌ Missing fields: roomId=${roomId}, userId=${userId}, name=${name}`);
+      return;
+    }
     console.log("Join request received (server):", { roomId, userId, name, joinState });
+    dbg('Join', `socket=${socket.id} | rooms active: ${Object.keys(rooms).length}`);
 
     // Init room if new
     if (!rooms[roomId]) {
+      dbg('Join', `🏛 Creating new room: ${roomId}`);
       rooms[roomId] = {
         host: { socketId: socket.id, userId, name }, // Phase 5 structure
         hostSocketId: socket.id, // Keep for compatibility
@@ -73,6 +101,7 @@ module.exports = (io, socket) => {
 
     const room = rooms[roomId];
     console.log("Room Host:", room.host?.socketId);
+    dbg('Join', `Room snapshot:`, roomSnap(roomId));
 
     // CASE 1: Host Entry
     if (room.hostSocketId === socket.id || Object.keys(room.users).length === 0) {
@@ -88,6 +117,7 @@ module.exports = (io, socket) => {
       socket.emit('host-status', true);
       broadcastParticipants(io, roomId);
       console.log(`[Socket] 👑 ${name} joined as HOST`);
+      dbg('Join', `👑 Host ${name} in room ${roomId} | Room: ${JSON.stringify(roomSnap(roomId))}`);
       return;
     }
 
@@ -102,15 +132,18 @@ module.exports = (io, socket) => {
       const others = Object.values(room.users)
         .filter(u => u.socketId !== socket.id)
         .map(u => ({ socketId: u.socketId, userId: u.userId, name: u.name }));
+      dbg('Join', `✅ ${name} approved. Sending all-users: [${others.map(o => o.name).join(', ')}]`);
       socket.emit('all-users', others);
       socket.to(roomId).emit('user-joined', { socketId: socket.id, userId, name });
       broadcastParticipants(io, roomId);
       console.log(`[Socket] ✅ ${name} entered meeting after approval`);
+      dbg('Join', `Room after approval: ${JSON.stringify(roomSnap(roomId))}`);
       return;
     }
 
     // CASE 3: New Participant (Needs host approval - Phase 2)
     console.log(`[Socket] ⏳ ${name} is waiting for host approval at ${room.hostSocketId}`);
+    dbg('Join', `Waiting room for ${name}. Host socket: ${room.hostSocketId}`);
     room.waitingUsers[socket.id] = { socketId: socket.id, userId, name };
 
     io.to(room.hostSocketId).emit('join-request', {
@@ -118,21 +151,31 @@ module.exports = (io, socket) => {
       fromName: name,
       fromUserId: userId
     });
+    dbg('Join', `📨 join-request sent to host ${room.hostSocketId}`);
 
     socket.emit('waiting-room');
   }
 
   socket.on('approve-join', ({ roomId, userId: targetSocketId }) => {
     const room = rooms[roomId];
-    if (!room || room.hostSocketId !== socket.id) return;
+    dbg('Approve', `Host ${socket.id} approving ${targetSocketId}`);
+    if (!room || room.hostSocketId !== socket.id) {
+      dbg('Approve', `❌ Auth fail: room=${!!room} | isHost=${room?.hostSocketId === socket.id}`);
+      return;
+    }
 
     const waiter = room.waitingUsers[targetSocketId];
-    if (!waiter) return;
+    if (!waiter) {
+      dbg('Approve', `❌ Waiter ${targetSocketId} not in waiting list`);
+      return;
+    }
 
     console.log(`[Socket] ✅ Host approved ${waiter.name}`);
+    dbg('Approve', `Room waiting list before: ${JSON.stringify(Object.keys(room.waitingUsers))}`);
     room.users[targetSocketId] = { ...waiter, role: 'participant' };
     delete room.waitingUsers[targetSocketId];
     io.to(targetSocketId).emit('join-approved', { role: 'participant' });
+    dbg('Approve', `✅ Emitted join-approved to ${targetSocketId}`);
   });
 
   socket.on('reject-join', ({ roomId, userId: targetSocketId }) => {
@@ -140,8 +183,10 @@ module.exports = (io, socket) => {
     if (!room || room.hostSocketId !== socket.id) return;
 
     console.log(`[Socket] ❌ Host rejected join request for ${targetSocketId}`);
+    dbg('Reject', `Removing ${targetSocketId} from waiting list`);
     delete room.waitingUsers[targetSocketId];
     io.to(targetSocketId).emit('join-rejected');
+    dbg('Reject', `❌ Emitted join-rejected to ${targetSocketId}`);
   });
 
   // ═══════════════════════════════════════════════
@@ -149,6 +194,7 @@ module.exports = (io, socket) => {
   // ═══════════════════════════════════════════════
   socket.on('sending-signal', ({ signal, toId }) => {
     console.log(`[Signaling] 📤 Offer: ${socket.id} → ${toId}`);
+    dbg('Signal', `sending-signal type=${signal?.type || 'unknown'} | from=${socket.id} to=${toId}`);
     io.to(toId).emit('user-received-offer', {
       signal,
       fromId: socket.id,
@@ -159,6 +205,7 @@ module.exports = (io, socket) => {
 
   socket.on('returning-signal', ({ signal, toId }) => {
     console.log(`[Signaling] 📥 Answer: ${socket.id} → ${toId}`);
+    dbg('Signal', `returning-signal type=${signal?.type || 'unknown'} | from=${socket.id} to=${toId}`);
     io.to(toId).emit('receiving-returned-signal', {
       signal,
       fromId: socket.id,
@@ -167,17 +214,20 @@ module.exports = (io, socket) => {
 
   socket.on('ice-candidate', ({ candidate, toId }) => {
     console.log(`[Signaling] 🧊 ICE: ${socket.id} → ${toId}`);
+    dbg('ICE', `candidate protocol=${candidate?.protocol} | from=${socket.id} to=${toId}`);
     io.to(toId).emit('ice-candidate', { candidate, fromId: socket.id });
   });
 
   // New-style offer/answer events (native RTCPeerConnection flow)
   socket.on('offer', ({ toId, sdp }) => {
     console.log(`[Signaling] 📨 Offer relay: ${socket.id} → ${toId}`);
+    dbg('Signal', `offer sdpType=${sdp?.type} | from=${socket.id} to=${toId}`);
     io.to(toId).emit('offer', { sdp, fromId: socket.id });
   });
 
   socket.on('answer', ({ toId, sdp }) => {
     console.log(`[Signaling] ✅ Answer relay: ${socket.id} → ${toId}`);
+    dbg('Signal', `answer sdpType=${sdp?.type} | from=${socket.id} to=${toId}`);
     io.to(toId).emit('answer', { sdp, fromId: socket.id });
   });
 
@@ -189,6 +239,7 @@ module.exports = (io, socket) => {
     if (!roomId || !content?.trim()) return;
 
     console.log(`[Chat] 💬 ${socket.userName}: ${content.trim()}`);
+    dbg('Chat', `sender=${socket.userId} | roomId=${roomId} | length=${content.trim().length}`);
 
     const messageData = {
       roomId,
@@ -200,11 +251,13 @@ module.exports = (io, socket) => {
 
     // Broadcast immediately (don't wait for DB)
     io.to(roomId).emit('receive-message', messageData);
+    dbg('Chat', `Broadcasted to room ${roomId}`);
 
     // Persist
     try {
       const msg = new Message(messageData);
       await msg.save();
+      dbg('Chat', `Message saved to DB: ${msg._id}`);
     } catch (err) {
       console.error('[Socket] Message save error:', err.message);
     }
@@ -218,6 +271,7 @@ module.exports = (io, socket) => {
     if (!roomId) return;
 
     console.log(`[Media] 🔊 ${socket.userName}: muted=${isMuted}, videoOff=${isVideoOff}`);
+    dbg('Media', `toggle-media | user=${socket.userName} | room=${roomId}`);
 
     // Update in-memory store
     if (rooms[roomId]?.users[socket.id]) {
@@ -259,6 +313,7 @@ module.exports = (io, socket) => {
     const roomId = socket.roomId;
     if (!roomId) return;
     console.log(`[Reaction] 😊 ${socket.userName}: ${emoji}`);
+    dbg('Reaction', `emoji=${emoji} | from=${socket.userName} | room=${roomId}`);
     io.to(roomId).emit('receive-reaction', {
       emoji,
       fromId: socket.id,
@@ -273,6 +328,7 @@ module.exports = (io, socket) => {
     const roomId = socket.roomId;
     if (!roomId) return;
     console.log(`[Hand] ✋ ${socket.userName}: ${isRaised ? 'raised' : 'lowered'}`);
+    dbg('Hand', `isRaised=${isRaised} | room=${roomId} | user=${socket.userName}`);
     if (rooms[roomId]?.users[socket.id]) {
       rooms[roomId].users[socket.id].isHandRaised = isRaised;
     }
@@ -433,23 +489,28 @@ module.exports = (io, socket) => {
     const rId = roomId || socket.roomId;
     if (!rId || !rooms[rId]) return;
 
-    const userSocket = [...io.sockets.sockets.values()].find(s => s.userId === userId);
-
-    if (!userSocket) {
-      console.log("User not found for screen share approval");
+    // Validate host
+    if (rooms[rId]?.hostSocketId !== socket.id) {
+      console.warn(`[Socket] 🚫 Non-host tried approve-screen-share`);
       return;
     }
 
-    console.log("Screen share approved for:", userId);
+    const userSocket = [...io.sockets.sockets.values()].find(s => s.userId === userId);
+    if (!userSocket) {
+      console.log("[ScreenShare] ❌ User not found for screen share approval, userId:", userId);
+      return;
+    }
 
-    // Notify the requester they're approved
+    console.log(`[ScreenShare] ✅ Host approved screen share for userId=${userId} socket=${userSocket.id}`);
+    dbg('ScreenShare', `Emitting screen-share-approved to ${userSocket.id}`);
+
     io.to(userSocket.id).emit('screen-share-approved');
 
-    // Update local tracking
+    // Update tracking & clear the pending request
     if (rooms[rId].users[userSocket.id]) {
       rooms[rId].users[userSocket.id].hasScreenShareApproval = true;
     }
-
+    rooms[rId].screenShareRequest = null;
     broadcastParticipants(io, rId);
   });
 
@@ -487,17 +548,41 @@ module.exports = (io, socket) => {
 
   socket.on('ai-update', (data) => {
     // data: { userId, roomId, tracker }
-    if (!data.roomId) return;
+    const roomId = socket.roomId; // Use server-authoritative roomId
+    if (!roomId || !rooms[roomId]) return;
 
-    // Broadcast to room (specifically to host for dashboard)
-    socket.to(data.roomId).emit('ai-update', { ...data, socketId: socket.id });
+    const room = rooms[roomId];
+    dbg('AI', `ai-update from ${socket.userName}(${socket.id}) | status=${data.tracker?.lastStatus} | score=${data.tracker?.engagementScore}%`);
+
+    const payload = { ...data, socketId: socket.id };
+
+    // 1. Forward to host specifically (guaranteed delivery)
+    if (room.hostSocketId && room.hostSocketId !== socket.id) {
+      io.to(room.hostSocketId).emit('ai-update', payload);
+      dbg('AI', `ai-update → HOST(${room.hostSocketId})`);
+    }
+
+    // 2. Also broadcast to rest of room (other participants)
+    socket.to(roomId).emit('ai-update', payload);
   });
 
   socket.on('ai-alert', (data) => {
     // data: { userId, roomId, status, alert, confidence, insights }
-    if (!data.roomId) return;
+    const roomId = socket.roomId;
+    if (!roomId || !rooms[roomId]) return;
 
-    socket.to(data.roomId).emit('ai-alert', { ...data, socketId: socket.id });
+    dbg('AI', `ai-alert from ${socket.userName}(${socket.id}) | status=${data.status} | alert="${data.alert}"`);
+
+    const room = rooms[roomId];
+    const payload = { ...data, socketId: socket.id };
+
+    // Forward alert to host specifically
+    if (room.hostSocketId && room.hostSocketId !== socket.id) {
+      io.to(room.hostSocketId).emit('ai-alert', payload);
+    }
+
+    // Broadcast to rest of room
+    socket.to(roomId).emit('ai-alert', payload);
   });
 
   // 9. HOST SENDS WARNING TO PARTICIPANT
@@ -512,6 +597,7 @@ module.exports = (io, socket) => {
     }
 
     console.log(`[Socket] ⚠️ Host warning to ${targetSocketId}: ${message}`);
+    dbg('Warning', `host=${socket.userName} | target=${targetSocketId} | msg="${message}"`);
     io.to(targetSocketId).emit('host-warning', { message });
   });
 
@@ -521,6 +607,7 @@ module.exports = (io, socket) => {
   socket.on('disconnect', () => {
     const roomId = socket.roomId;
     console.log(`[Socket] ❌ Disconnected: ${socket.id} from room ${roomId || 'none'}`);
+    dbg('Disconnect', `user=${socket.userName || 'unknown'} | role=${socket.role || 'unknown'} | room=${roomId || 'none'}`);
 
     if (!roomId || !rooms[roomId]) return;
 
@@ -531,6 +618,7 @@ module.exports = (io, socket) => {
     if (user) {
       const leaveTime = new Date();
       const duration = Math.floor((leaveTime - new Date(user.joinedAt)) / 1000);
+      dbg('Attendance', `${user.name} stayed ${duration}s in room ${roomId}`);
       room.attendanceLog.push({
         userId: user.userId,
         name: user.name,
@@ -550,6 +638,7 @@ module.exports = (io, socket) => {
     if (Object.keys(room.users).length === 0) {
       // Last person left — clean up room
       console.log(`[Socket] 🗑️ Room ${roomId} is now empty. Saving report...`);
+      dbg('Room', `Closing room ${roomId} | total logs: ${room.attendanceLog.length}`);
       saveFinalReport(roomId, room);
       delete rooms[roomId];
     } else if (room.hostSocketId === socket.id) {
@@ -562,9 +651,11 @@ module.exports = (io, socket) => {
         room.users[nextUser.socketId].role = 'host';
         io.to(nextUser.socketId).emit('host-status', true);
         console.log(`[Socket] 👑 New host promoted: ${nextUser.name} (${nextUser.socketId})`);
+        dbg('Promote', `New host: ${nextUser.name} | room: ${roomId}`);
         broadcastParticipants(io, roomId);
       }
     } else {
+      dbg('Disconnect', `Room ${roomId} still has ${Object.keys(room.users).length} user(s)`);
       broadcastParticipants(io, roomId);
     }
   });

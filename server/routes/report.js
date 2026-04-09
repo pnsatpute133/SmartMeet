@@ -3,6 +3,13 @@ const router  = express.Router();
 const { Parser } = require('json2csv');
 const MeetingReport = require('../models/MeetingReport');
 
+const DEBUG = true;
+function dbg(tag, ...args) {
+  if (!DEBUG) return;
+  const ts = new Date().toISOString().substring(11, 23);
+  console.log(`[${ts}] [DEBUG][Report/${tag}]`, ...args);
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // POST /api/report/save
 // Called by host when meeting ends (or periodically from socket handler)
@@ -11,6 +18,7 @@ const MeetingReport = require('../models/MeetingReport');
 router.post('/save', async (req, res) => {
   try {
     const { meetingId, participants, duration, hostName } = req.body;
+    dbg('save', `meetingId=${meetingId} | participants=${participants?.length} | duration=${duration}s | host=${hostName}`);
     if (!meetingId) return res.status(400).json({ message: 'meetingId required' });
 
     // Upsert: update existing report or create new one
@@ -46,8 +54,10 @@ router.post('/save', async (req, res) => {
     );
 
     res.json({ message: 'Report saved', reportId: report._id });
+    dbg('save', `✅ Saved reportId=${report._id} | meetingId=${meetingId}`);
   } catch (err) {
     console.error('[Report] save error:', err.message);
+    dbg('save', `❌ Error: ${err.message}`);
     res.status(500).json({ message: err.message });
   }
 });
@@ -58,10 +68,16 @@ router.post('/save', async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════
 router.get('/:meetingId', async (req, res) => {
   try {
+    dbg('get', `meetingId=${req.params.meetingId}`);
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
-    if (!report) return res.status(404).json({ message: 'Report not found' });
+    if (!report) {
+      dbg('get', `❌ Report not found for ${req.params.meetingId}`);
+      return res.status(404).json({ message: 'Report not found' });
+    }
+    dbg('get', `✅ Found report: ${report._id} | participants=${report.participants?.length}`);
     res.json(report);
   } catch (err) {
+    dbg('get', `❌ Error: ${err.message}`);
     res.status(500).json({ message: err.message });
   }
 });
@@ -72,6 +88,7 @@ router.get('/:meetingId', async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════
 router.get('/:meetingId/csv', async (req, res) => {
   try {
+    dbg('csv', `Generating CSV for meetingId=${req.params.meetingId}`);
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
 
     // If no saved report yet, return empty CSV with headers

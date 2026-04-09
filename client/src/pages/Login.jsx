@@ -52,6 +52,8 @@ export default function Login() {
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
             <input 
+              id="login-email"
+              name="email"
               type="email" 
               required
               className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg focus:ring-2 focus:ring-brand-blue outline-none transition-all"
@@ -63,6 +65,8 @@ export default function Login() {
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
             <input 
+              id="login-password"
+              name="password"
               type="password" 
               required
               className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg focus:ring-2 focus:ring-brand-blue outline-none transition-all"

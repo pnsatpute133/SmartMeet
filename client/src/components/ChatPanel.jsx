@@ -144,6 +144,8 @@ export default function ChatPanel({ messages, onSendMessage, onClose, currentUse
         <form onSubmit={handleSubmit} className="relative flex items-center">
           <input 
             ref={inputRef}
+            id="chat-input"
+            name="chat-message"
             type="text" 
             placeholder="Send a message to everyone" 
             className="w-full bg-[#3c4043]/50 border border-[#5f6368]/30 rounded-full px-5 py-3 pr-12 text-[14px] text-white focus:bg-[#3c4043]/80 focus:border-[#8ab4f8]/50 transition-all outline-none placeholder-[#9aa0a6]"
