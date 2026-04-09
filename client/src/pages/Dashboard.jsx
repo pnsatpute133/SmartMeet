@@ -33,7 +33,7 @@ export default function Dashboard() {
   const fetchHistory = async () => {
     try {
       if (!user?._id) return;
-      const res = await axios.get(`${API_BASE_URL}/meetings?userId=${user._id}`);
+      const res = await axios.get(`${API_BASE_URL}/meetings`);
       setHistory(res.data);
     } catch (err) {
       console.error('Failed to fetch history:', err);
@@ -48,10 +48,8 @@ export default function Dashboard() {
     setShowNewMeetingMenu(false);
     
     try {
-      await axios.post(`${API_BASE_URL}/meetings`, {
-        meetingId,
-        hostId: user._id
-      });
+      await axios.post(`${API_BASE_URL}/meetings`, { meetingId });
+
     } catch (err) {
       console.error('Error creating meeting for later:', err);
     }
@@ -61,10 +59,8 @@ export default function Dashboard() {
     const meetingId = uuidv4();
     console.log('[Dashboard] Starting instant meeting:', meetingId);
     try {
-      await axios.post(`${API_BASE_URL}/meetings`, {
-        meetingId,
-        hostId: user._id
-      });
+      await axios.post(`${API_BASE_URL}/meetings`, { meetingId });
+
       setHostStatus(true);
       navigate(`/meeting/${meetingId}`);
     } catch (err) {

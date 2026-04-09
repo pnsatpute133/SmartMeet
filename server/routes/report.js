@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { Parser } = require('json2csv');
 const MeetingReport = require('../models/MeetingReport');
+const { protect } = require('../middleware/authMiddleware');
 
 const DEBUG = true;
 function dbg(tag, ...args) {
@@ -15,7 +16,7 @@ function dbg(tag, ...args) {
 // Called by host when meeting ends (or periodically from socket handler)
 // Body: { meetingId, participants:[...], duration, hostName }
 // ══════════════════════════════════════════════════════════════════════════
-router.post('/save', async (req, res) => {
+router.post('/save', protect, async (req, res) => {
   try {
     const { meetingId, participants, duration, hostName } = req.body;
     dbg('save', `meetingId=${meetingId} | participants=${participants?.length} | duration=${duration}s | host=${hostName}`);
@@ -66,7 +67,7 @@ router.post('/save', async (req, res) => {
 // GET /api/report/:meetingId
 // Returns stored report JSON
 // ══════════════════════════════════════════════════════════════════════════
-router.get('/:meetingId', async (req, res) => {
+router.get('/:meetingId', protect, async (req, res) => {
   try {
     dbg('get', `meetingId=${req.params.meetingId}`);
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
@@ -86,7 +87,7 @@ router.get('/:meetingId', async (req, res) => {
 // GET /api/report/:meetingId/csv
 // Generates and downloads CSV file
 // ══════════════════════════════════════════════════════════════════════════
-router.get('/:meetingId/csv', async (req, res) => {
+router.get('/:meetingId/csv', protect, async (req, res) => {
   try {
     dbg('csv', `Generating CSV for meetingId=${req.params.meetingId}`);
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
@@ -147,7 +148,7 @@ router.get('/:meetingId/csv', async (req, res) => {
 // GET /api/report/:meetingId/attendance
 // Returns attendance records as JSON
 // ══════════════════════════════════════════════════════════════════════════
-router.get('/:meetingId/attendance', async (req, res) => {
+router.get('/:meetingId/attendance', protect, async (req, res) => {
   try {
     const report = await MeetingReport.findOne(
       { meetingId: req.params.meetingId },
@@ -170,7 +171,7 @@ router.get('/:meetingId/attendance', async (req, res) => {
 // GET /api/report/:meetingId/attendance/csv
 // Downloads attendance as CSV: Name, Role, Join Time, Leave Time, Duration
 // ══════════════════════════════════════════════════════════════════════════
-router.get('/:meetingId/attendance/csv', async (req, res) => {
+router.get('/:meetingId/attendance/csv', protect, async (req, res) => {
   try {
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
 
@@ -215,7 +216,7 @@ router.get('/:meetingId/attendance/csv', async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════
 // GET /api/report (list all reports — host utility)
 // ══════════════════════════════════════════════════════════════════════════
-router.get('/', async (req, res) => {
+router.get('/', protect, async (req, res) => {
   try {
     const reports = await MeetingReport
       .find({}, 'meetingId hostName startedAt endedAt duration participants')

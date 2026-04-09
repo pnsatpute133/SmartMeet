@@ -194,10 +194,14 @@ export default function useEngagementMonitor({
     console.log(`[AI] 📤 Sending frame for user: ${userId}`);
     const t0 = Date.now();
     try {
+      const token = localStorage.getItem('token');
       const res = await fetch(`${AI_SERVER_URL}/detect`, {
         method: 'POST',
         mode: 'cors', // Explicitly handle CORS
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
         body: JSON.stringify({
           userId,
           roomId,
@@ -316,9 +320,13 @@ export default function useEngagementMonitor({
   } = {}) => {
     try {
       dbg('Report', `Saving report | meetingId=${roomId} | participants=${participants?.length} | duration=${duration}s`);
+      const token = localStorage.getItem('token');
       const res = await fetch(`${API_SERVER_URL}/api/report/save`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
         body: JSON.stringify({ meetingId: roomId, participants, duration, hostName }),
       });
       if (!res.ok) throw new Error(`Save failed: ${res.status}`);

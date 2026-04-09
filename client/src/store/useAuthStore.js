@@ -19,6 +19,7 @@ const useAuthStore = create((set) => ({
   },
   logout: () => {
     localStorage.removeItem('smartmeet_user');
+    localStorage.removeItem('token');
     set({ user: null });
   },
 }));

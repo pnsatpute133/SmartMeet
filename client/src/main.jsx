@@ -12,6 +12,10 @@ window.global = window;
 
 // Global axios interceptors for client-side logging
 axios.interceptors.request.use(request => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    request.headers.Authorization = `Bearer ${token}`;
+  }
   console.log('[Client Request]:', request.method?.toUpperCase(), request.url, request.data || '');
   return request;
 });

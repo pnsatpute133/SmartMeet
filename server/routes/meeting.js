@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Meeting = require('../models/Meeting');
+const { protect } = require('../middleware/authMiddleware');
 
 const DEBUG = true;
 function dbg(tag, ...args) {
@@ -10,11 +11,10 @@ function dbg(tag, ...args) {
 }
 
 // GET /api/meetings - Fetch all meetings where user was host or participant
-router.get('/', async (req, res) => {
+router.get('/', protect, async (req, res) => {
   try {
-    const { userId } = req.query;
-    dbg('GET/', `userId=${userId}`);
-    if (!userId) return res.status(400).json({ message: "userId is required" });
+    const userId = req.user._id;
+    dbg('GET/', `userId=${userId} (from token)`);
 
     const meetings = await Meeting.find({
       $or: [
@@ -32,13 +32,14 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/meetings - Create a new meeting entry when user starts a meeting
-router.post('/', async (req, res) => {
+router.post('/', protect, async (req, res) => {
   try {
-    const { meetingId, hostId } = req.body;
-    dbg('POST/', `meetingId=${meetingId} | hostId=${hostId}`);
+    const { meetingId } = req.body;
+    const hostId = req.user._id;
+    dbg('POST/', `meetingId=${meetingId} | hostId=${hostId} (from token)`);
     
-    if (!meetingId || !hostId) {
-      return res.status(400).json({ message: "meetingId and hostId are required" });
+    if (!meetingId) {
+      return res.status(400).json({ message: "meetingId is required" });
     }
 
     // Check if meeting with this ID already exists
@@ -71,10 +72,12 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /api/meetings/join - Track participant joining
-router.put('/join', async (req, res) => {
+router.put('/join', protect, async (req, res) => {
   try {
-    const { meetingId, userId, name } = req.body;
-    dbg('PUT/join', `meetingId=${meetingId} | userId=${userId} | name=${name}`);
+    const { meetingId } = req.body;
+    const userId = req.user._id;
+    const name = req.user.name;
+    dbg('PUT/join', `meetingId=${meetingId} | userId=${userId} | name=${name} (from token)`);
 
     // FIX: $addToSet must use the correct sub-document shape
     const meeting = await Meeting.findOneAndUpdate(
