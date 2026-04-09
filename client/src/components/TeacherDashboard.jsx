@@ -254,8 +254,12 @@ export default function TeacherDashboard({
             <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
               padding: '12px 20px', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
               color: activeTab === tab.id ? '#818cf8' : '#475569',
+              borderTop: 'none',
+              borderLeft: 'none',
+              borderRight: 'none',
               borderBottom: activeTab === tab.id ? '2px solid #818cf8' : '2px solid transparent',
-              background: 'none', border: 'none', transition: 'color 0.15s',
+              background: 'none', 
+              transition: 'color 0.15s',
             }}>
               {tab.label}
             </button>

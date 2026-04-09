@@ -31,24 +31,26 @@ router.post('/save', protect, async (req, res) => {
           hostName:     hostName || '',
           duration:     duration || 0,
           endedAt:      new Date(),
-          participants: (participants || []).map(p => ({
-            userId:             p.userId,
-            name:               p.name,
-            totalTime:          p.totalTime          || 0,
-            attentiveTime:      p.attentiveTime      || 0,
-            distractedTime:     p.distractedTime     || 0,
-            phoneTime:          p.phoneTime          || 0,
-            multiplePeopleTime: p.multiplePeopleTime || 0,
-            drowsyTime:         p.drowsyTime         || 0,
-            poorPostureTime:    p.poorPostureTime    || 0,
-            speakingTime:       p.speakingTime       || 0,
-            speakingMutedTime:  p.speakingMutedTime  || 0,
-            noFaceTime:         p.noFaceTime         || 0,
-            engagementScore:    p.engagementScore    || 0,
-            warnings:           p.warnings           || [],
-            summary:            p.summary            || '',
-            timeline:           (p.timeline || []).slice(-200),
-          })),
+          participants: (participants || [])
+            .filter(p => p && p.userId && p.name) // Validation to prevent 500 errors
+            .map(p => ({
+              userId:             p.userId,
+              name:               p.name,
+              totalTime:          p.totalTime          || 0,
+              attentiveTime:      p.attentiveTime      || 0,
+              distractedTime:     p.distractedTime     || 0,
+              phoneTime:          p.phoneTime          || 0,
+              multiplePeopleTime: p.multiplePeopleTime || 0,
+              drowsyTime:         p.drowsyTime         || 0,
+              poorPostureTime:    p.poorPostureTime    || 0,
+              speakingTime:       p.speakingTime       || 0,
+              speakingMutedTime:  p.speakingMutedTime  || 0,
+              noFaceTime:         p.noFaceTime         || 0,
+              engagementScore:    p.engagementScore    || 0,
+              warnings:           p.warnings           || [],
+              summary:            p.summary            || '',
+              timeline:           (p.timeline || []).slice(-200),
+            })),
         }
       },
       { upsert: true, new: true }
@@ -57,9 +59,14 @@ router.post('/save', protect, async (req, res) => {
     res.json({ message: 'Report saved', reportId: report._id });
     dbg('save', `✅ Saved reportId=${report._id} | meetingId=${meetingId}`);
   } catch (err) {
-    console.error('[Report] save error:', err.message);
+    console.error('[Report] save error:', err);
     dbg('save', `❌ Error: ${err.message}`);
-    res.status(500).json({ message: err.message });
+    // Return specific error message if available to help debug 500s
+    res.status(500).json({ 
+      message: 'Failed to save meeting report', 
+      error: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
@@ -92,40 +99,42 @@ router.get('/:meetingId/csv', protect, async (req, res) => {
     dbg('csv', `Generating CSV for meetingId=${req.params.meetingId}`);
     const report = await MeetingReport.findOne({ meetingId: req.params.meetingId });
 
-    // If no saved report yet, return empty CSV with headers
+    // If no saved report yet, provide a friendly "No data" CSV instead of 404
     const participants = report?.participants || [];
 
     const csvData = participants.map(p => {
-      const total = p.totalTime || 1; // avoid div/0
+      const total = p.totalTime || 1; 
       return {
-        'Name':          p.name,
-        'Duration':      `${p.totalTime}s`,
-        'Engagement %':  `${p.engagementScore}%`,
-        'Phone %':       `${Math.round((p.phoneTime / total) * 100)}%`,
-        'Distracted %':  `${Math.round((p.distractedTime / total) * 100)}%`,
-        'Drowsy %':      `${Math.round(((p.drowsyTime || 0) / total) * 100)}%`,
-        'Warnings':      (p.warnings || []).join(' | '),
-        'Summary':       p.summary || '',
+        'Name':             p.name,
+        'Total Time':       `${p.totalTime}s`,
+        'Attentive %':      `${p.engagementScore}%`,
+        'Distracted %':     `${Math.round((p.distractedTime / total) * 100)}%`,
+        'Phone %':          `${Math.round((p.phoneTime / total) * 100)}%`,
+        'Drowsy %':         `${Math.round(((p.drowsyTime || 0) / total) * 100)}%`,
+        'Multiple Faces %': `${Math.round(((p.multiplePeopleTime || 0) / total) * 100)}%`,
+        'Warnings':         (p.warnings || []).join(' | '),
+        'Summary':          p.summary || '',
       };
     });
 
     if (csvData.length === 0) {
       csvData.push({
-        'Name': 'No data',
-        'Duration': '0s',
-        'Engagement %': '0%',
-        'Phone %': '0%',
+        'Name': 'No AI Data Recorded',
+        'Total Time': '0s',
+        'Attentive %': '0%',
         'Distracted %': '0%',
+        'Phone %': '0%',
         'Drowsy %': '0%',
-        'Warnings': '',
-        'Summary': 'No AI tracking data recorded for this meeting',
+        'Multiple Faces %': '0%',
+        'Warnings': 'None',
+        'Summary': 'Report has not been saved yet or no participants were tracked.',
       });
     }
 
     const fields = [
-      'Name', 'Duration', 'Engagement %',
-      'Phone %', 'Distracted %', 'Drowsy %',
-      'Warnings', 'Summary',
+      'Name', 'Total Time', 'Attentive %',
+      'Distracted %', 'Phone %', 'Drowsy %',
+      'Multiple Faces %', 'Warnings', 'Summary',
     ];
 
     const parser = new Parser({ fields });
@@ -137,6 +146,7 @@ router.get('/:meetingId/csv', protect, async (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // Ensure UTF-8 with BOM for Excel compatibility
     res.send('\uFEFF' + csv);
   } catch (err) {
     console.error('[Report] CSV error:', err.message);

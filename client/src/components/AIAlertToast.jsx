@@ -10,8 +10,10 @@ import { useEffect, useState } from 'react';
 const STATUS_CONFIG = {
   attentive:        { color: '#22c55e', bg: 'rgba(34,197,94,0.12)',  icon: '✅', label: 'Attentive' },
   distracted:       { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', icon: '👀', label: 'Distracted' },
+  looking_sideways: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', icon: '↔️', label: 'Looking Sideways' },
   phone:            { color: '#ef4444', bg: 'rgba(239,68,68,0.15)',  icon: '📵', label: 'Phone Detected' },
-  multiple_people:  { color: '#a855f7', bg: 'rgba(168,85,247,0.15)', icon: '🚨', label: 'Multiple People' },
+  multiple_faces:   { color: '#a855f7', bg: 'rgba(168,85,247,0.15)', icon: '🚨', label: 'Multiple Faces' },
+  multiple_people:  { color: '#a855f7', bg: 'rgba(168,85,247,0.15)', icon: '🚨', label: 'Multiple Faces' }, 
   drowsy:           { color: '#3b82f6', bg: 'rgba(59,130,246,0.15)', icon: '😴', label: 'Drowsy' },
   poor_posture:     { color: '#fb923c', bg: 'rgba(251,146,60,0.12)', icon: '🪑', label: 'Poor Posture' },
   speaking:         { color: '#2dd4bf', bg: 'rgba(45,212,191,0.12)', icon: '🎤', label: 'Speaking' },

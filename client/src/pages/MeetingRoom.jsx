@@ -250,9 +250,13 @@ export default function MeetingRoom() {
       ...Object.values(allTrackers)
     ];
 
+    // Convert "MM:SS" string to total seconds
+    const [mins, secs] = meetingTime.split(':').map(Number);
+    const durationSec = (mins * 60) + secs;
+
     await saveMeetingReport({
       participants: finalTrackers,
-      duration: meetingTime,
+      duration: durationSec,
       hostName: user?.name
     });
 
@@ -670,13 +674,37 @@ export default function MeetingRoom() {
           aiEnabled={aiEnabled}
           meetingTime={meetingTime}
           onToggleAI={handleToggleAI}
-          onDownloadCSV={downloadCSV}
-          onDownloadAttendanceCSV={() => {
-            const url = `${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api/report/${roomId}/attendance/csv`;
-            const a = document.createElement('a');
-            a.href = url; a.target = '_blank';
-            a.download = `Attendance_${roomId.slice(0, 8)}.csv`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          onDownloadCSV={async () => {
+            // PHASE 1 FIX: Auto-save before download to prevent 404 and ensure latest data
+            // Convert "MM:SS" string to total seconds
+            const [mins, secs] = meetingTime.split(':').map(Number);
+            const durationSec = (mins * 60) + secs;
+
+            await saveMeetingReport({
+              participants: [myTracker, ...Object.values(allTrackers)],
+              duration: durationSec,
+              hostName: user?.name,
+            });
+            downloadCSV();
+          }}
+          onDownloadAttendanceCSV={async () => {
+            try {
+              const url = `${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api/report/${roomId}/attendance/csv`;
+              const token = localStorage.getItem('token');
+              const res = await fetch(url, {
+                headers: { 'Authorization': token ? `Bearer ${token}` : '' }
+              });
+              if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+              const blob = await res.blob();
+              const blobUrl = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = `Attendance_${roomId.slice(0, 8)}.csv`;
+              document.body.appendChild(a); a.click(); document.body.removeChild(a);
+              window.URL.revokeObjectURL(blobUrl);
+            } catch (err) {
+              alert(`Attendance Download failed: ${err.message}`);
+            }
           }}
           onSaveReport={() => saveMeetingReport({
             participants: [myTracker, ...Object.values(allTrackers)],

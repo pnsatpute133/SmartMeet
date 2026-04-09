@@ -233,52 +233,124 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
     return features
 
 
+# ── Global state for temporal patterns ────────────────────────────────────
+# Structure: { userId -> { 
+#   "drowsy_start": float or None, 
+#   "no_face_start": float or None,
+#   "multiple_start": float or None,
+#   "phone_start": float or None,
+#   "distracted_start": float or None,
+#   "current_stable_status": str
+# } }
+user_tracking_state: dict[str, dict] = defaultdict(lambda: {
+    "drowsy_start": None, 
+    "no_face_start": None,
+    "multiple_start": None,
+    "phone_start": None,
+    "distracted_start": None,
+    "current_stable_status": "attentive"
+})
+
 def classify_behaviour(
-    person_count: int,
-    phone_detected: bool,
-    laptop_detected: bool,
+    userId: str,
+    boxes,
+    names,
     advanced: dict,
     is_muted: bool,
-    yolo_conf: float,
+    frame_w: int,
+    frame_h: int
 ) -> Tuple[str, Optional[str], float]:
     """
-    Priority-based behavior classification.
+    Priority-based behavior classification with smoothing (Phase 13):
+    Only change state if detected continuously for ~1.5 - 2 seconds.
     """
-    if person_count == 0:
-        logger.debug("[Classify] status=no_face")
-        return "no_face", "⚠️ No face detected", 0.5
-
-    if person_count > 1:
-        logger.debug(f"[Classify] status=multiple_people | count={person_count}")
-        return "multiple_people", "🚨 Unauthorized person", 0.98
-
-    if phone_detected:
-        logger.debug("[Classify] status=phone")
-        return "phone", "Stop using phone", 0.95
-
-    if advanced.get("is_drowsy"):
-        logger.debug(f"[Classify] status=drowsy | EAR={advanced.get('ear')}")
-        return "drowsy", "Stay alert", 0.90
-
-    if advanced.get("slumping"):
-        logger.debug(f"[Classify] status=poor_posture | score={advanced.get('posture_score')}")
-        return "poor_posture", "Sit straight", 0.80
-
-    if not advanced.get("facing_forward"):
-        logger.debug(f"[Classify] status=distracted | yaw={advanced.get('yaw')} pitch={advanced.get('pitch')}")
-        return "distracted", "Pay attention", 0.82
-
-    if advanced.get("is_speaking") and is_muted:
-        logger.debug("[Classify] status=speaking_muted")
-        return "speaking_muted", "You are speaking while muted", 0.85
+    now = time.time()
     
+    # Preliminary YOLO parsing
+    persons = []
+    phones = []
+    
+    for box in boxes:
+        cls = int(box.cls[0])
+        conf = float(box.conf[0])
+        xyxy = box.xyxy[0].tolist() 
+        box_w, box_h = xyxy[2] - xyxy[0], xyxy[3] - xyxy[1]
+        area_pct = (box_w * box_h) / (frame_w * frame_h)
+        
+        if cls == PERSON_CLASS and conf > 0.6 and area_pct > 0.01:
+            persons.append({"box": xyxy, "conf": conf})
+        if cls == PHONE_CLASS and conf > 0.5:
+            phones.append({"box": xyxy, "conf": conf})
+
+    person_count = len(persons)
+
+    # 1. NO FACE (Phase 2)
+    if person_count == 0:
+        if user_tracking_state[userId]["no_face_start"] is None:
+            user_tracking_state[userId]["no_face_start"] = now
+        if now - user_tracking_state[userId]["no_face_start"] > 2.0:
+            return "no_face", "Please stay in front of camera", 0.6
+    else:
+        user_tracking_state[userId]["no_face_start"] = None
+
+    # 2. MULTIPLE FACES (Phase 1)
+    if person_count >= 2:
+        if user_tracking_state[userId]["multiple_start"] is None:
+            user_tracking_state[userId]["multiple_start"] = now
+        if now - user_tracking_state[userId]["multiple_start"] > 1.5:
+            return "multiple_faces", "Multiple people detected", 0.95
+    else:
+        user_tracking_state[userId]["multiple_start"] = None
+
+    # 3. PHONE DETECTION (Phase 5 - Near face region)
+    phone_in_use = False
+    if phones and persons:
+        p_box = persons[0]["box"]
+        for ph in phones:
+            ph_box = ph["box"]
+            # Overlap check
+            if not (ph_box[2] < p_box[0] or ph_box[0] > p_box[2] or ph_box[3] < p_box[1] or ph_box[1] > p_box[3]):
+                phone_in_use = True
+                break
+    
+    if phone_in_use:
+        if user_tracking_state[userId]["phone_start"] is None:
+            user_tracking_state[userId]["phone_start"] = now
+        if now - user_tracking_state[userId]["phone_start"] > 1.5:
+            return "phone", "Stop using phone", 0.95
+    else:
+        user_tracking_state[userId]["phone_start"] = None
+
+    # 4. DROWSINESS (Phase 4)
+    if advanced.get("ear", 1.0) < EYE_AR_THRESH:
+        if user_tracking_state[userId]["drowsy_start"] is None:
+            user_tracking_state[userId]["drowsy_start"] = now
+        if now - user_tracking_state[userId]["drowsy_start"] > 1.5:
+            return "drowsy", "Stay alert", 0.90
+    else:
+        user_tracking_state[userId]["drowsy_start"] = None
+
+    # 5. HEAD POSE (Phase 3 & 9)
+    yaw = advanced.get("yaw", 0)
+    pitch = advanced.get("pitch", 0)
+    is_distracted = abs(yaw) > 20 or pitch < -25
+    
+    if is_distracted:
+        if user_tracking_state[userId]["distracted_start"] is None:
+            user_tracking_state[userId]["distracted_start"] = now
+        if now - user_tracking_state[userId]["distracted_start"] > 1.5:
+            return "distracted", "Pay attention", 0.85
+    else:
+        user_tracking_state[userId]["distracted_start"] = None
+
+    # 6. TALKING / MUTED (Phase 6 & 7)
     if advanced.get("is_speaking"):
-        logger.debug("[Classify] status=speaking")
+        if is_muted:
+            return "speaking_muted", "You are speaking while muted", 0.85
         return "speaking", None, 0.90
 
-    conf = min(0.70 + yolo_conf * 0.30, 0.99)
-    logger.debug(f"[Classify] status=attentive | conf={conf:.3f}")
-    return "attentive", None, conf
+    # Default
+    return "attentive", None, 0.90
 
 
 def get_agentic_insights(user_id: str) -> dict:
@@ -286,42 +358,30 @@ def get_agentic_insights(user_id: str) -> dict:
     Analyse history and generate actionable summaries.
     """
     history = list(behaviour_history[user_id])
+    if not history: return {"summary": "Starting...", "engagement_score": 0, "suggestions": [], "timeline": []}
+
     now = time.time()
     window = [(ts, st) for ts, st in history if now - ts < HISTORY_WINDOW_SEC]
-
-    if not window:
-        logger.debug(f"[Insights] No history for userId={user_id}")
-        return {"summary": "Initializing...", "engagement_score": 0, "suggestions": [], "timeline": []}
+    if not window: return {"summary": "No data", "engagement_score": 0, "suggestions": [], "timeline": []}
 
     counts = defaultdict(int)
-    for _, st in window:
-        counts[st] += 1
+    for _, st in window: counts[st] += 1
     total = len(window)
 
-    # SECONDS ESTIMATION (approx 2s interval)
-    att_sec    = round(counts["attentive"] * 2.0)
-    dist_sec   = round((counts["distracted"] + counts["phone"]) * 2.0)
-    drowsy_sec = round(counts["drowsy"] * 2.0)
-    
-    # Advanced Score logic
-    score = (counts["attentive"] * 1.0 + counts["speaking"] * 1.0 + counts["poor_posture"] * 0.6 + counts["distracted"] * 0.4) / total * 100
-    score = min(100, round(score))
+    # Focus Score = (attentiveTime / totalTime) * 100
+    attentive_samples = counts["attentive"] + counts["speaking"] 
+    score = min(100, round((attentive_samples / total) * 100))
 
     suggestions = []
-    if score < 40: suggestions.append("Critical: Engagement is failing.")
-    if drowsy_sec > 15: suggestions.append("Drowsiness pattern — suggest a 1-min break.")
-    if counts["speaking_muted"] > 3: suggestions.append("Student keeps trying to talk while muted.")
+    if score < 40: suggestions.append("Critical: Focus is very low.")
+    if counts["phone"] > 2: suggestions.append("Phone usage pattern detected.")
 
     dominant = max(counts, key=counts.get) if counts else "unknown"
-    logger.debug(
-        f"[Insights] userId={user_id} | score={score} | dominant={dominant} "
-        f"| attentive={att_sec}s dist={dist_sec}s drowsy={drowsy_sec}s | window={total} samples"
-    )
+    print(f"AI result: {dominant} | count: {total}")
     
     return {
-        "summary": f"Engagement: {score}%. Tone: {dominant}.",
+        "summary": f"Focus: {score}%. Dominant state: {dominant}.",
         "engagement_score": score,
-        "attentive_pct": round(counts["attentive"] / total * 100) if total else 0,
         "suggestions": suggestions,
         "timeline": [st for _, st in window][-20:] 
     }
@@ -332,75 +392,27 @@ def get_agentic_insights(user_id: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════
 @app.post("/detect", response_model=DetectionResult)
 async def detect(req: FrameRequest):
-    t_start = time.time()
-    logger.debug(f"[/detect] → userId={req.userId} | roomId={req.roomId} | isMuted={req.isMuted} | ts={req.ts}")
-
-    if yolo_model is None:
-        logger.error("[/detect] YOLO model not loaded yet!")
-        raise HTTPException(503, "Model loading...")
+    if yolo_model is None: raise HTTPException(503, "Model loading...")
 
     try:
         img_bgr = b64_to_cv2(req.frame)
     except Exception as e:
-        logger.error(f"[/detect] Frame decode failed: {e}")
         raise HTTPException(400, f"Bad frame: {e}")
 
-    # Process frame
     h, w = img_bgr.shape[:2]
-    orig_size = (w, h)
-    if w > 640:
-        scale = 640 / w
-        img_bgr = cv2.resize(img_bgr, (640, int(h * scale)))
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    logger.debug(f"[/detect] Frame: orig={orig_size} resized={img_bgr.shape[:2][::-1]}")
 
-    # 1. YOLO Inference
-    t_yolo = time.time()
-    results = yolo_model(img_bgr, verbose=False, conf=0.30)[0]
-    boxes   = results.boxes
-    logger.debug(f"[/detect] YOLO done in {round((time.time()-t_yolo)*1000)}ms | detections={len(boxes)}")
-
-    person_count    = 0
-    phone_detected  = False
-    laptop_detected = False
-    max_yolo_conf   = 0.0
-
-    for box in boxes:
-        cls  = int(box.cls[0])
-        conf = float(box.conf[0])
-        label = results.names[cls]
-        logger.debug(f"[YOLO] box: class={cls}({label}) conf={conf:.2f}")
-        if cls == PERSON_CLASS:
-            person_count += 1
-            max_yolo_conf = max(max_yolo_conf, conf)
-        elif cls == PHONE_CLASS:
-            phone_detected = True
-        elif cls == LAPTOP_CLASS:
-            laptop_detected = True
-
-    logger.debug(
-        f"[/detect] YOLO summary: persons={person_count} "
-        f"phone={phone_detected} laptop={laptop_detected} max_conf={max_yolo_conf:.2f}"
-    )
-
-    # 2. MediaPipe Features
-    t_mp = time.time()
+    # Inference & MP
+    results = yolo_model(img_bgr, verbose=False, conf=0.25)[0]
     advanced = estimate_advanced_features(img_rgb)
-    logger.debug(f"[/detect] MediaPipe done in {round((time.time()-t_mp)*1000)}ms")
 
-    # 3. Behavior Logic
+    # Behavior Logic (Phase 1-14 Implementation)
     status, alert, confidence = classify_behaviour(
-        person_count, phone_detected, laptop_detected, advanced, req.isMuted, max_yolo_conf
-    )
-    logger.info(
-        f"[/detect] ✅ userId={req.userId} | status=\033[1m{status}\033[0m "
-        f"conf={confidence:.2f} | alert={alert!r} | "
-        f"total_ms={round((time.time()-t_start)*1000)}"
+        req.userId, results.boxes, results.names, advanced, req.isMuted, w, h
     )
 
-    # 4. Agentic Logic
+    # Track & Insights
     behaviour_history[req.userId].append((time.time(), status))
-    logger.debug(f"[/detect] History for {req.userId}: {len(behaviour_history[req.userId])} entries")
     insights = get_agentic_insights(req.userId)
 
     return DetectionResult(
@@ -408,11 +420,7 @@ async def detect(req: FrameRequest):
         roomId=req.roomId,
         status=status,
         confidence=round(confidence, 3),
-        details={
-            "persons": person_count,
-            "distractions": {"phone": phone_detected, "laptop": laptop_detected},
-            "biometrics": advanced
-        },
+        details={"persons": len(results.boxes), "biometrics": advanced},
         alert=alert,
         insights=insights,
         timeline=insights.get("timeline", [])

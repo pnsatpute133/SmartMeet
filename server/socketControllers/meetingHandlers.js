@@ -32,14 +32,32 @@ const rooms = {};
 async function saveFinalReport(roomId, roomData) {
   try {
     dbg('DB', `Saving final report for room: ${roomId}`);
-    dbg('DB', `Attendance records: ${roomData.attendanceLog?.length || 0}`);
+
+    // ── ATTENDANCE FIX: Process users still in the room ──────────────────
+    const now = new Date();
+    Object.values(roomData.users || {}).forEach(user => {
+      const joinTime = user.joinedAt ? new Date(user.joinedAt) : now;
+      const duration = Math.floor((now - joinTime) / 1000);
+      
+      roomData.attendanceLog.push({
+        userId: user.userId,
+        name: user.name,
+        role: user.role,
+        joinTime: joinTime,
+        leaveTime: now,
+        durationSeconds: duration > 0 ? duration : 0
+      });
+    });
+    // Optional: deduplicate if needed, but usually users are unique per socketId
+    
+    dbg('DB', `Attendance records total: ${roomData.attendanceLog?.length || 0}`);
     const MeetingReport = require('../models/MeetingReport');
     await MeetingReport.findOneAndUpdate(
       { meetingId: roomId },
       {
         $set: {
           meetingId: roomId,
-          endedAt: new Date(),
+          endedAt: now,
           attendance: roomData.attendanceLog
         }
       },
@@ -353,6 +371,12 @@ module.exports = (io, socket) => {
 
     console.log(`[Socket] 🔴 Host ${socket.userName} ending meeting ${roomId}`);
     io.to(roomId).emit('meeting-ended');
+
+    // ── ATTENDANCE FIX: Save report before deleting room ──────────────────
+    if (rooms[roomId]) {
+      dbg('Room', `Host ending meeting. Saving attendance for ${roomId}`);
+      saveFinalReport(roomId, rooms[roomId]);
+    }
 
     // Disconnect all sockets in room
     const socketsInRoom = io.sockets.adapter.rooms.get(roomId);

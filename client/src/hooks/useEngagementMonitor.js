@@ -39,7 +39,7 @@ function analysePatterns(tracker) {
 
   if (!totalTime) return { summary: 'No data yet', warnings: [], engagementScore: 0 };
 
-  const attPct    = Math.round((attentiveTime / totalTime) * 100);
+  const attPct    = Math.round(((attentiveTime + speakingTime) / totalTime) * 100);
   const distPct   = Math.round((distractedTime     / totalTime) * 100);
   const drowsyPct = Math.round((drowsyTime         / totalTime) * 100);
 
@@ -137,11 +137,13 @@ export default function useEngagementMonitor({
     next.totalTime += TICK_SEC;
     switch (status) {
       case 'attentive':        next.attentiveTime       += TICK_SEC; break;
-      case 'distracted':       next.distractedTime      += TICK_SEC; break;
+      case 'distracted':       
+      case 'looking_sideways': 
+      case 'looking_down':     next.distractedTime      += TICK_SEC; break;
       case 'phone':            next.phoneTime           += TICK_SEC; break;
+      case 'multiple_faces':
       case 'multiple_people':  next.multiplePeopleTime  += TICK_SEC; break;
       case 'drowsy':           next.drowsyTime          += TICK_SEC; break;
-      case 'poor_posture':     next.poorPostureTime     += TICK_SEC; break;
       case 'speaking':         next.speakingTime        += TICK_SEC; break;
       case 'speaking_muted':   next.speakingMutedTime   += TICK_SEC; break;
       case 'no_face':          next.noFaceTime          += TICK_SEC; break;
@@ -342,16 +344,37 @@ export default function useEngagementMonitor({
 
   // ── Download CSV ──────────────────────────────────────────────────────
   const downloadCSV = useCallback(async () => {
-    const url = `${API_SERVER_URL}/api/report/${roomId}/csv`;
-    dbg('CSV', `Downloading CSV from: ${url}`);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.target  = '_blank';
-    a.download = `SmartMeet_${roomId.slice(0, 8)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    dbg('CSV', 'Download triggered');
+    try {
+      const url = `${API_SERVER_URL}/api/report/${roomId}/csv`;
+      dbg('CSV', `Downloading CSV from: ${url}`);
+      const token = localStorage.getItem('token');
+      
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
+
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      const dateStr = new Date().toISOString().split('T')[0];
+      a.download = `SmartMeet_Report_${roomId.slice(0, 8)}_${dateStr}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+
+      dbg('CSV', 'Download successful');
+    } catch (err) {
+      console.error('[CSV] Download error:', err);
+      alert(`CSV Download failed: ${err.message}`);
+    }
   }, [roomId]);
 
   return {
