@@ -14,11 +14,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 const AI_SERVER_URL  = import.meta.env.VITE_AI_SERVER_URL  || 'http://localhost:8000';
 const API_SERVER_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002';
-const CAPTURE_MS     = 2000;    // 1 frame every 2 seconds
+const CAPTURE_MS     = 1200;    // 1 frame every 1.2 seconds (Phase 11)
 const JPEG_QUALITY   = 0.50;
 const CANVAS_WIDTH   = 320;
 const MAX_RETRIES    = 3;
-const TICK_SEC       = 2;       // seconds each sample represents
+const TICK_SEC       = 1.2;       // seconds each sample represents (Phase 11)
 
 // ── Debug Logger ──────────────────────────────────────────────────────────
 const DEBUG = true;
@@ -113,6 +113,10 @@ export default function useEngagementMonitor({
   const lastStatusRef = useRef('idle');
   const myTrackerRef  = useRef(myTracker);
 
+  // ── AI detection stability (Phase 1 & 9) ──────────────────────────────────
+  const detectionHistoryRef = useRef([]);
+  const lastPopupTimeRef    = useRef(0);
+
   // Keep ref in sync
   useEffect(() => { myTrackerRef.current = myTracker; }, [myTracker]);
 
@@ -139,14 +143,18 @@ export default function useEngagementMonitor({
       case 'attentive':        next.attentiveTime       += TICK_SEC; break;
       case 'distracted':       
       case 'looking_sideways': 
-      case 'looking_down':     next.distractedTime      += TICK_SEC; break;
+      case 'looking_down':     
+      case 'drowsy':           
+      case 'no_face':          
+        next.distractedTime      += TICK_SEC; // Phase 8: Distraction Logic
+        if (status === 'drowsy') next.drowsyTime += TICK_SEC;
+        if (status === 'no_face') next.noFaceTime += TICK_SEC;
+        break;
       case 'phone':            next.phoneTime           += TICK_SEC; break;
       case 'multiple_faces':
       case 'multiple_people':  next.multiplePeopleTime  += TICK_SEC; break;
-      case 'drowsy':           next.drowsyTime          += TICK_SEC; break;
       case 'speaking':         next.speakingTime        += TICK_SEC; break;
       case 'speaking_muted':   next.speakingMutedTime   += TICK_SEC; break;
-      case 'no_face':          next.noFaceTime          += TICK_SEC; break;
       default: break;
     }
     next.lastStatus = status;
@@ -221,11 +229,54 @@ export default function useEngagementMonitor({
       const data = await res.json();
       const latency = Date.now() - t0;
       console.log(`[AI] 📥 Response:`, data.status, data.confidence);
-      dbg('Frame', `✅ status=${data.status} conf=${data.confidence} alert=${JSON.stringify(data.alert)} latency=${latency}ms`);
+      dbg('Frame', `✅ status=${data.status} conf=${data.confidence} latency=${latency}ms`);
       failCountRef.current = 0;
 
+      // PHASE 10: Improve Detection Sensitivity
+      // Tune face confidence threshold
+      if (data.status !== 'no_face' && data.confidence < 0.6) {
+        dbg('Frame', 'Low confidence detection, skipping update');
+        return;
+      }
+
+      // PHASE 1: Detection Stability (Maintaining state buffer)
+      detectionHistoryRef.current.push(data.status);
+      if (detectionHistoryRef.current.length > 5) {
+        detectionHistoryRef.current.shift();
+      }
+
+      // Check for stable status (appears >= 3 times in last 5 detections)
+      const counts = {};
+      detectionHistoryRef.current.forEach(s => counts[s] = (counts[s] || 0) + 1);
+      const stableStatus = Object.keys(counts).find(s => counts[s] >= 3 && s !== 'attentive');
+
+      let finalAlert = null;
+      const now = Date.now();
+
+      // PHASE 9: Prevent Popup Spam (4s cooldown)
+      if (stableStatus && (now - lastPopupTimeRef.current > 4000)) {
+        // Behavioral trigger logic
+        if (stableStatus === 'multiple_faces' || stableStatus === 'multiple_people') {
+          finalAlert = "Multiple people detected"; // Phase 2
+        } else if (stableStatus === 'speaking') {
+          finalAlert = "You are talking"; // Phase 3
+        } else if (stableStatus === 'speaking_muted') {
+          finalAlert = "You are speaking while muted"; // Phase 4
+        } else if (stableStatus === 'looking_sideways' || stableStatus === 'looking_down') {
+          finalAlert = "Please look at the screen"; // Phase 5
+        } else if (stableStatus === 'drowsy') {
+          finalAlert = "You seem sleepy 😴"; // Phase 6
+        } else if (stableStatus === 'no_face') {
+          finalAlert = "Please stay in front of camera"; // Phase 7
+        }
+
+        if (finalAlert) {
+          lastPopupTimeRef.current = now;
+        }
+      }
+
       setStatus(data.status);
-      setAlert(data.alert || null);
+      if (finalAlert) setAlert(finalAlert);
       setInsights(data.insights || null);
       setConfidence(data.confidence || 0);
       lastStatusRef.current = data.status;
@@ -240,11 +291,11 @@ export default function useEngagementMonitor({
       socket?.emit('ai-alert', {
         userId, roomId,
         status:     data.status,
-        alert:      data.alert,
+        alert:      finalAlert,
         confidence: data.confidence,
         insights:   data.insights,
       });
-      dbg('Socket', `Emitted ai-alert | status=${data.status}`);
+      dbg('Socket', `Emitted ai-alert | status=${data.status} alert=${finalAlert}`);
 
     } catch (err) {
       console.error(`[AI] ❌ Connection error:`, err.message);
