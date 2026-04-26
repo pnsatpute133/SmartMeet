@@ -94,22 +94,19 @@ module.exports = (io, socket) => {
   // JOIN ROOM & WAITING ROOM (Phase 1 & 2)
   // ═══════════════════════════════════════════════
   socket.on('join-room', handleJoin);
-  socket.on('request-join', handleJoin);
+  socket.on('request-join', handleJoin); // keep for backward compat
 
   async function handleJoin({ roomId, userId, name, joinState }) {
-    if (!roomId || !userId || !name) {
-      dbg('Join', `❌ Missing fields: roomId=${roomId}, userId=${userId}, name=${name}`);
-      return;
-    }
-    console.log("Join request received (server):", { roomId, userId, name, joinState });
-    dbg('Join', `socket=${socket.id} | rooms active: ${Object.keys(rooms).length}`);
+    if (!roomId || !userId || !name) return;
 
-    // Init room if new
+    // PHASE 2: BACKEND ROOM JOIN FIX
+    socket.join(roomId);
+    console.log(`User ${userId} joined room ${roomId}`);
+
     if (!rooms[roomId]) {
-      dbg('Join', `🏛 Creating new room: ${roomId}`);
       rooms[roomId] = {
-        host: { socketId: socket.id, userId, name }, // Phase 5 structure
-        hostSocketId: socket.id, // Keep for compatibility
+        hostSocketId: socket.id,
+        host: { socketId: socket.id, userId, name },
         users: {},
         waitingUsers: {},
         attendanceLog: [],
@@ -117,61 +114,27 @@ module.exports = (io, socket) => {
       };
     }
 
-    const room = rooms[roomId];
-    console.log("Room Host:", room.host?.socketId);
-    dbg('Join', `Room snapshot:`, roomSnap(roomId));
+    const role = (rooms[roomId].hostSocketId === socket.id) ? 'host' : 'participant';
+    
+    rooms[roomId].users[socket.id] = {
+      socketId: socket.id, userId, name, role,
+      isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
+    };
+    
+    socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = role;
 
-    // CASE 1: Host Entry
-    if (room.hostSocketId === socket.id || Object.keys(room.users).length === 0) {
-      room.hostSocketId = socket.id;
-      room.host = { socketId: socket.id, userId, name };
-      room.users[socket.id] = {
-        socketId: socket.id, userId, name, role: 'host',
-        isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
-      };
-      socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = 'host';
-      socket.join(roomId);
-      socket.emit('join-approved', { role: 'host' });
-      socket.emit('host-status', true);
-      broadcastParticipants(io, roomId);
-      console.log(`[Socket] 👑 ${name} joined as HOST`);
-      dbg('Join', `👑 Host ${name} in room ${roomId} | Room: ${JSON.stringify(roomSnap(roomId))}`);
-      return;
-    }
+    socket.emit('join-approved', { role });
+    if (role === 'host') socket.emit('host-status', true);
 
-    // CASE 2: Approved Participant Entry
-    if (joinState === 'approved' || (room.users[socket.id] && room.users[socket.id].role !== 'host')) {
-      room.users[socket.id] = {
-        socketId: socket.id, userId, name, role: 'participant',
-        isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
-      };
-      socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = 'participant';
-      socket.join(roomId);
-      const others = Object.values(room.users)
-        .filter(u => u.socketId !== socket.id)
-        .map(u => ({ socketId: u.socketId, userId: u.userId, name: u.name }));
-      dbg('Join', `✅ ${name} approved. Sending all-users: [${others.map(o => o.name).join(', ')}]`);
-      socket.emit('all-users', others);
-      socket.to(roomId).emit('user-joined', { socketId: socket.id, userId, name });
-      broadcastParticipants(io, roomId);
-      console.log(`[Socket] ✅ ${name} entered meeting after approval`);
-      dbg('Join', `Room after approval: ${JSON.stringify(roomSnap(roomId))}`);
-      return;
-    }
+    // PHASE 3: EXISTING USERS LIST
+    const clients = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+    // Send existing users to the newcomer (filter self out)
+    socket.emit("existing-users", clients.filter(id => id !== socket.id));
 
-    // CASE 3: New Participant (Needs host approval - Phase 2)
-    console.log(`[Socket] ⏳ ${name} is waiting for host approval at ${room.hostSocketId}`);
-    dbg('Join', `Waiting room for ${name}. Host socket: ${room.hostSocketId}`);
-    room.waitingUsers[socket.id] = { socketId: socket.id, userId, name };
+    // Notify others
+    socket.to(roomId).emit("user-joined", { userId: socket.id, name });
 
-    io.to(room.hostSocketId).emit('join-request', {
-      fromSocketId: socket.id,
-      fromName: name,
-      fromUserId: userId
-    });
-    dbg('Join', `📨 join-request sent to host ${room.hostSocketId}`);
-
-    socket.emit('waiting-room');
+    broadcastParticipants(io, roomId);
   }
 
   socket.on('approve-join', ({ roomId, userId: targetSocketId }) => {

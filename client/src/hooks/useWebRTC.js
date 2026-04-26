@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { BASE_URL } from '../config';
 import useMeetingStore from '../store/useMeetingStore';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5002';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || BASE_URL;
 
 export default function useWebRTC(roomId, user) {
   const [localStream, setLocalStream]   = useState(null);
@@ -77,8 +78,7 @@ export default function useWebRTC(roomId, user) {
 
     const pc = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.l.google.com:19302' }
       ]
     });
 
@@ -224,16 +224,16 @@ export default function useWebRTC(roomId, user) {
 
     const sock = io(SOCKET_URL, {
       transports: ['websocket'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+      reconnection: true,
+      reconnectionAttempts: 5
     });
     socketRef.current = sock;
     setSocket(sock);
 
     sock.on('connect', () => {
       console.log('[Socket] ✅ Connected:', sock.id);
-      // PHASE 8: Mandatory Log
-      console.log("Host socket:", sock.id);
+      // PHASE 10: SOCKET CONNECTION CHECK
+      console.log("Socket connected:", sock.id);
     });
     sock.on('connect_error', err => {
       console.error('[Socket] ❌ Connection error:', err.message);
@@ -267,37 +267,23 @@ export default function useWebRTC(roomId, user) {
       });
     });
 
-    // Set up all event listeners here (offer/answer/ice using native RTCPeerConnection)
-    // ── EVENT: I get list of existing users (as newcomer) ──
-    sock.on('all-users', users => {
-      console.log('[WebRTC] 👥 Existing users in room:', users.length);
-      users.forEach(({ socketId, userId, name }) => {
-        if (peersRef.current[socketId]) return; // Already connected
-        // Initiate an outgoing peer connection (create offer)
-        createPeerConnectionAndOffer(socketId);
-        addParticipant({ socketId, userId, name });
+    // PHASE 4: FRONTEND HANDLE USERS
+    sock.on("existing-users", (users) => {
+      users.forEach(userId => {
+        // userId is actually the socketId here
+        console.log("Creating peer:", userId);
+        createPeerConnectionAndOffer(userId);
       });
     });
 
-    // ── EVENT: An existing user (Host) sees me join ───────────────
-    sock.on('user-joined', ({ socketId, userId, name }) => {
-      console.log('[WebRTC] 👋 New user joined:', name);
+    // PHASE 5: HANDLE NEW USER JOIN
+    sock.on("user-joined", ({ userId, name }) => {
+      console.log("User joined:", userId);
+      console.log("Creating peer:", userId);
+      createPeerConnectionAndOffer(userId);
       
-      // PHASE 4: Host must connect to EVERY participant
-      if (peersRef.current[socketId]) return;
-      
-      // If we are host, we initiate the connection (Phase 4)
-      const { isHost } = useMeetingStore.getState();
-      if (isHost) {
-        console.log(`[WebRTC] 👑 I am Host, initiating connection to new user: ${name}`);
-        createPeerConnectionAndOffer(socketId);
-      }
-      
-      addParticipant({ socketId, userId, name });
-      
-      // PHASE 8: Mandatory Log
-      console.log("Participants state after join:", useMeetingStore.getState().participants);
-      console.log("Peers mapping:", peersRef.current);
+      // Update UI state
+      addParticipant({ socketId: userId, userId, name });
     });
 
     // ── EVENT: Incoming offer from a remote peer ───────────
@@ -521,16 +507,15 @@ export default function useWebRTC(roomId, user) {
         // Emit join-request AFTER media is ready (Phase 1)
         console.log("Sending join request (client)");
         
-        // PHASE 7: Prevent re-initialization if already joined with this sock instance
+        // PHASE 1: VERIFY ROOM JOIN (CRITICAL)
         if (!isJoinedRef.current || joinState === 'idle') {
-          socketRef.current.emit('request-join', { 
-            roomId, 
-            userId: user._id, 
-            name: user.name,
-            joinState 
+          console.log("Joining room:", roomId);
+          socketRef.current.emit('join-room', { 
+            roomId: roomId, 
+            userId: user._id || user.userId, 
+            name: user.name
           });
-          console.log('[Socket] 📡 Emitted request-join for', roomId, '(State:', joinState + ')');
-          if (joinState === 'approved') isJoinedRef.current = true;
+          isJoinedRef.current = true;
         }
       })
       .catch(err => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import axios from 'axios';
+import api from '../utils/axios';
 import { useNavigate, Link } from 'react-router-dom';
 import { Video } from 'lucide-react';
 import useAuthStore from '../store/useAuthStore';
@@ -13,8 +13,14 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!navigator.onLine) {
+      setError("No internet connection");
+      return;
+    }
+
     try {
-      const response = await axios.post(`${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api/auth/login`, {
+      const response = await api.post(`/api/auth/login`, {
         email,
         password
       });
@@ -25,9 +31,9 @@ export default function Login() {
         login(response.data);
         navigate('/');
       }
-    } catch (error) {
-      console.error('Error:', error.response?.data || error.message);
-      setError(error.response?.data?.message || error.message || 'Server error. Is the backend running?');
+    } catch (err) {
+      console.log("API ERROR:", err.message);
+      setError(err.response?.data?.message || err.message || 'Server error. Is the backend running?');
     }
   };
 

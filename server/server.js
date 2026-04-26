@@ -92,7 +92,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 5002;
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log('╔══════════════════════════════════════════════╗');
   console.log(`║  SmartMeet Server — port ${PORT}               ║`);
   console.log(`║  DEBUG mode: ${DEBUG ? 'ON ' : 'OFF'} | ENV: ${process.env.NODE_ENV || 'development'}     ║`);

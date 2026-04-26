@@ -9,6 +9,7 @@ import ChatPanel from '../components/ChatPanel';
 import ParticipantPanel from '../components/ParticipantPanel';
 import Reactions from '../components/Reactions';
 import SettingsModal from '../components/SettingsModal';
+import { SERVER_URL } from '../config';
 
 // AI Monitoring Features (PHASE 2 RESTORATION)
 import useEngagementMonitor from '../hooks/useEngagementMonitor';
@@ -689,7 +690,7 @@ export default function MeetingRoom() {
           }}
           onDownloadAttendanceCSV={async () => {
             try {
-              const url = `${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api/report/${roomId}/attendance/csv`;
+              const url = `${import.meta.env.VITE_API_SERVER_URL || SERVER_URL}/api/report/${roomId}/attendance/csv`;
               const token = localStorage.getItem('token');
               const res = await fetch(url, {
                 headers: { 'Authorization': token ? `Bearer ${token}` : '' }

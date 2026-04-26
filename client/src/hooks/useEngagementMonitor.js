@@ -11,10 +11,13 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import axios from 'axios';
 
-const AI_SERVER_URL  = import.meta.env.VITE_AI_SERVER_URL  || 'http://localhost:8000';
-const API_SERVER_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002';
-const CAPTURE_MS     = 1200;    // 1 frame every 1.2 seconds (Phase 11)
+import { SERVER_URL, AI_URL } from '../config';
+
+const AI_SERVER_URL  = import.meta.env.VITE_AI_SERVER_URL  || AI_URL;
+const API_SERVER_URL = import.meta.env.VITE_API_SERVER_URL || SERVER_URL;
+const CAPTURE_MS     = 1000;    // 1 frame every 1 second (Phase 8)
 const JPEG_QUALITY   = 0.50;
 const CANVAS_WIDTH   = 320;
 const MAX_RETRIES    = 3;
@@ -115,10 +118,64 @@ export default function useEngagementMonitor({
 
   // ── AI detection stability (Phase 1 & 9) ──────────────────────────────────
   const detectionHistoryRef = useRef([]);
-  const lastPopupTimeRef    = useRef(0);
+  const lastAlertRef = useRef(0); // Phase 6 cooldown
 
   // Keep ref in sync
   useEffect(() => { myTrackerRef.current = myTracker; }, [myTracker]);
+
+  // PHASE 5: FIX POPUP BLOCKING ISSUE
+  const showPopup = useCallback((msg) => {
+    // PHASE 6: ADD COOLDOWN (2000ms)
+    if (Date.now() - lastAlertRef.current < 2000) return;
+
+    setAlert(msg);
+    lastAlertRef.current = Date.now();
+  }, []);
+
+  // PHASE 4: ALERT MAPPING
+  const triggerAlert = useCallback((status) => {
+    if (isHost) return;
+    
+    console.log("Triggering alert:", status); // Phase 7 log
+
+    switch(status) {
+      case "phone":
+        showPopup("Stop using phone");
+        break;
+      case "distracted":
+      case "looking_sideways":
+      case "looking_down":
+        showPopup("Pay attention");
+        break;
+      case "no_face":
+        showPopup("Stay in front of camera");
+        break;
+      case "drowsy":
+        showPopup("You seem sleepy 😴");
+        break;
+      case "looking_away":
+        showPopup("Please look at the screen");
+        break;
+      case "multiple_faces":
+      case "multiple_people":
+        showPopup("Multiple people detected");
+        break;
+      case "talking_muted":
+      case "speaking_muted":
+        showPopup("You are speaking while muted");
+        break;
+      default:
+        break;
+    }
+  }, [isHost, showPopup]);
+
+  // PHASE 3: TRIGGER ALERT IMMEDIATELY
+  useEffect(() => {
+    if (!status || status === 'idle' || status === 'attentive' || status === 'speaking') return;
+    
+    console.log("AI status:", status); // Phase 7 log
+    triggerAlert(status);
+  }, [status, triggerAlert]);
 
   // Create hidden canvas + video
   useEffect(() => {
@@ -179,13 +236,9 @@ export default function useEngagementMonitor({
     if (isVideoOff) {
       const st = 'no_face';
       dbg('Frame', `Video off → status=no_face | userId=${userId}`);
-      if (lastStatusRef.current !== st) {
-        lastStatusRef.current = st;
-        setStatus(st);
-        setAlert('⚠️ Please turn on your camera');
-        setMyTracker(prev => applyTick(prev, st));
-        socket?.emit('ai-alert', { userId, roomId, status: st, alert: '⚠️ Camera off', confidence: 1, insights: null });
-      }
+      setStatus(st); // This will trigger the useEffect for alert
+      setMyTracker(prev => applyTick(prev, st));
+      socket?.emit('ai-alert', { userId, roomId, status: st, alert: '⚠️ Camera off', confidence: 1, insights: null });
       return;
     }
 
@@ -205,78 +258,33 @@ export default function useEngagementMonitor({
     const t0 = Date.now();
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`${AI_SERVER_URL}/detect`, {
-        method: 'POST',
-        mode: 'cors', // Explicitly handle CORS
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({
-          userId,
-          roomId,
-          frame: b64Frame,
-          ts: Date.now(),
-          isMuted
-        })
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`AI Server Error (${res.status}): ${errText.slice(0, 100)}`);
+      
+      if (!navigator.onLine) {
+        showPopup("No internet connection");
+        return;
       }
       
-      const data = await res.json();
+      // PHASE 1: VERIFY AI RESPONSE FLOW
+      const res = await axios.post(`${AI_URL}/detect`, {
+        userId,
+        roomId,
+        frame: b64Frame,
+        ts: Date.now(),
+        isMuted
+      }, {
+        headers: { 
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
+
+      const data = res.data;
+      console.log("AI Response:", data); // Mandatory log
       const latency = Date.now() - t0;
-      console.log(`[AI] 📥 Response:`, data.status, data.confidence);
       dbg('Frame', `✅ status=${data.status} conf=${data.confidence} latency=${latency}ms`);
       failCountRef.current = 0;
 
-      // PHASE 10: Improve Detection Sensitivity
-      // Tune face confidence threshold
-      if (data.status !== 'no_face' && data.confidence < 0.6) {
-        dbg('Frame', 'Low confidence detection, skipping update');
-        return;
-      }
-
-      // PHASE 1: Detection Stability (Maintaining state buffer)
-      detectionHistoryRef.current.push(data.status);
-      if (detectionHistoryRef.current.length > 5) {
-        detectionHistoryRef.current.shift();
-      }
-
-      // Check for stable status (appears >= 3 times in last 5 detections)
-      const counts = {};
-      detectionHistoryRef.current.forEach(s => counts[s] = (counts[s] || 0) + 1);
-      const stableStatus = Object.keys(counts).find(s => counts[s] >= 3 && s !== 'attentive');
-
-      let finalAlert = null;
-      const now = Date.now();
-
-      // PHASE 9: Prevent Popup Spam (4s cooldown)
-      if (stableStatus && (now - lastPopupTimeRef.current > 4000)) {
-        // Behavioral trigger logic
-        if (stableStatus === 'multiple_faces' || stableStatus === 'multiple_people') {
-          finalAlert = "Multiple people detected"; // Phase 2
-        } else if (stableStatus === 'speaking') {
-          finalAlert = "You are talking"; // Phase 3
-        } else if (stableStatus === 'speaking_muted') {
-          finalAlert = "You are speaking while muted"; // Phase 4
-        } else if (stableStatus === 'looking_sideways' || stableStatus === 'looking_down') {
-          finalAlert = "Please look at the screen"; // Phase 5
-        } else if (stableStatus === 'drowsy') {
-          finalAlert = "You seem sleepy 😴"; // Phase 6
-        } else if (stableStatus === 'no_face') {
-          finalAlert = "Please stay in front of camera"; // Phase 7
-        }
-
-        if (finalAlert) {
-          lastPopupTimeRef.current = now;
-        }
-      }
-
+      // Phase 2: Map Detection to State
       setStatus(data.status);
-      if (finalAlert) setAlert(finalAlert);
       setInsights(data.insights || null);
       setConfidence(data.confidence || 0);
       lastStatusRef.current = data.status;
@@ -291,14 +299,13 @@ export default function useEngagementMonitor({
       socket?.emit('ai-alert', {
         userId, roomId,
         status:     data.status,
-        alert:      finalAlert,
+        alert:      null, // Alert handled locally for better reactivity
         confidence: data.confidence,
         insights:   data.insights,
       });
-      dbg('Socket', `Emitted ai-alert | status=${data.status} alert=${finalAlert}`);
 
     } catch (err) {
-      console.error(`[AI] ❌ Connection error:`, err.message);
+      console.log("API ERROR:", err.message);
       dbg('Frame', `❌ Error #${failCountRef.current + 1}: ${err.message}`);
       failCountRef.current += 1;
       if (failCountRef.current >= MAX_RETRIES) {

@@ -5,11 +5,9 @@ import {
   Share2, History, ChevronRight, Copy, Check, X, Link as LinkIcon 
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
+import api from '../utils/axios';
 import useAuthStore from '../store/useAuthStore';
 import useMeetingStore from '../store/useMeetingStore';
-
-const API_BASE_URL = `${import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5002'}/api`;
 
 export default function Dashboard() {
   const [meetingCode, setMeetingCode] = useState('');
@@ -31,12 +29,13 @@ export default function Dashboard() {
   }, [user]);
 
   const fetchHistory = async () => {
+    if (!navigator.onLine) return;
     try {
       if (!user?._id) return;
-      const res = await axios.get(`${API_BASE_URL}/meetings`);
+      const res = await api.get(`/api/meetings`);
       setHistory(res.data);
     } catch (err) {
-      console.error('Failed to fetch history:', err);
+      console.log("API ERROR:", err.message);
     }
   };
 
@@ -47,24 +46,34 @@ export default function Dashboard() {
     setShowLaterModal(true);
     setShowNewMeetingMenu(false);
     
+    if (!navigator.onLine) {
+      alert("No internet connection");
+      return;
+    }
+    
     try {
-      await axios.post(`${API_BASE_URL}/meetings`, { meetingId });
-
+      await api.post(`/api/meetings`, { meetingId });
     } catch (err) {
-      console.error('Error creating meeting for later:', err);
+      console.log("API ERROR:", err.message);
     }
   };
 
   const startInstantMeeting = async () => {
     const meetingId = uuidv4();
     console.log('[Dashboard] Starting instant meeting:', meetingId);
+    
+    if (!navigator.onLine) {
+      alert("No internet connection");
+      return;
+    }
+    
     try {
-      await axios.post(`${API_BASE_URL}/meetings`, { meetingId });
+      await api.post(`/api/meetings`, { meetingId });
 
       setHostStatus(true);
       navigate(`/meeting/${meetingId}`);
     } catch (err) {
-      console.error('Failed to start meeting:', err);
+      console.log("API ERROR:", err.message);
       navigate(`/meeting/${meetingId}`); // Fallback
     }
   };
