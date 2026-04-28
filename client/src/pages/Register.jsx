@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import api from '../utils/axios';
+import axios from 'axios';
+import { SERVER_URL } from '../config';
 import { useNavigate, Link } from 'react-router-dom';
 import { Video } from 'lucide-react';
 import useAuthStore from '../store/useAuthStore';
@@ -21,7 +22,7 @@ export default function Register() {
     }
 
     try {
-      const response = await api.post(`/api/auth/register`, {
+      const response = await axios.post(`${SERVER_URL}/api/auth/register`, {
         name,
         email,
         password

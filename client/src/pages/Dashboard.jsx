@@ -5,7 +5,8 @@ import {
   Share2, History, ChevronRight, Copy, Check, X, Link as LinkIcon 
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import api from '../utils/axios';
+import axios from 'axios';
+import { SERVER_URL } from '../config';
 import useAuthStore from '../store/useAuthStore';
 import useMeetingStore from '../store/useMeetingStore';
 
@@ -32,7 +33,10 @@ export default function Dashboard() {
     if (!navigator.onLine) return;
     try {
       if (!user?._id) return;
-      const res = await api.get(`/api/meetings`);
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`${SERVER_URL}/api/meetings`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setHistory(res.data);
     } catch (err) {
       console.log("API ERROR:", err.message);
@@ -52,7 +56,10 @@ export default function Dashboard() {
     }
     
     try {
-      await api.post(`/api/meetings`, { meetingId });
+      const token = localStorage.getItem('token');
+      await axios.post(`${SERVER_URL}/api/meetings`, { meetingId }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
     } catch (err) {
       console.log("API ERROR:", err.message);
     }
@@ -68,7 +75,10 @@ export default function Dashboard() {
     }
     
     try {
-      await api.post(`/api/meetings`, { meetingId });
+      const token = localStorage.getItem('token');
+      await axios.post(`${SERVER_URL}/api/meetings`, { meetingId }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
       setHostStatus(true);
       navigate(`/meeting/${meetingId}`);

@@ -20,13 +20,19 @@ from pydantic import BaseModel
 # ── Optional: MediaPipe for head-pose estimation ──────────────────────────
 try:
     import mediapipe as mp
-    mp_face_mesh = mp.solutions.face_mesh
-    face_mesh_solver = mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=4,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+
+    base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
+    options = vision.FaceLandmarkerOptions(
+        base_options=base_options,
+        running_mode=vision.RunningMode.IMAGE,
+        num_faces=4,
+        min_face_detection_confidence=0.5,
+        min_face_presence_confidence=0.5,
+        min_tracking_confidence=0.5
     )
+    face_mesh_solver = vision.FaceLandmarker.create_from_options(options)
     MEDIAPIPE_OK = True
 except (ImportError, AttributeError, Exception) as _mp_err:
     MEDIAPIPE_OK = False
@@ -170,13 +176,15 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
         return {"yaw": 0.0, "pitch": 0.0, "facing_forward": True, "ear": 0.3, "mar": 0.0, "is_drowsy": False, "posture_score": 100}
 
     h, w = img_rgb.shape[:2]
-    results = face_mesh_solver.process(img_rgb)
     
-    if not results.multi_face_landmarks:
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+    results = face_mesh_solver.detect(mp_image)
+    
+    if not results.face_landmarks:
         logger.debug("[AI] No face landmarks found by MediaPipe")
         return {"yaw": 0.0, "pitch": 0.0, "facing_forward": False, "ear": 0.0, "mar": 0.0, "is_drowsy": False, "posture_score": 0}
 
-    lm = results.multi_face_landmarks[0].landmark
+    lm = results.face_landmarks[0]
 
     # 1. Head Pose Estimation
     def pt(idx):

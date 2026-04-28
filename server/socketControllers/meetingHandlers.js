@@ -94,7 +94,30 @@ module.exports = (io, socket) => {
   // JOIN ROOM & WAITING ROOM (Phase 1 & 2)
   // ═══════════════════════════════════════════════
   socket.on('join-room', handleJoin);
-  socket.on('request-join', handleJoin); // keep for backward compat
+
+  socket.on('request-join', ({ roomId, userId, name }) => {
+    if (!roomId || !userId || !name) return;
+
+    if (!rooms[roomId]) {
+      // First person, room doesn't exist, so they are the host and join immediately
+      return handleJoin({ roomId, userId, name });
+    }
+
+    const hostSocketId = rooms[roomId].hostSocketId;
+    rooms[roomId].waitingUsers[socket.id] = {
+      socketId: socket.id,
+      userId,
+      name
+    };
+
+    socket.emit('waiting-room');
+
+    io.to(hostSocketId).emit("join-request", {
+      userId,
+      name,
+      socketId: socket.id
+    });
+  });
 
   async function handleJoin({ roomId, userId, name, joinState }) {
     if (!roomId || !userId || !name) return;
@@ -137,37 +160,29 @@ module.exports = (io, socket) => {
     broadcastParticipants(io, roomId);
   }
 
-  socket.on('approve-join', ({ roomId, userId: targetSocketId }) => {
-    const room = rooms[roomId];
-    dbg('Approve', `Host ${socket.id} approving ${targetSocketId}`);
-    if (!room || room.hostSocketId !== socket.id) {
-      dbg('Approve', `❌ Auth fail: room=${!!room} | isHost=${room?.hostSocketId === socket.id}`);
-      return;
-    }
-
-    const waiter = room.waitingUsers[targetSocketId];
-    if (!waiter) {
-      dbg('Approve', `❌ Waiter ${targetSocketId} not in waiting list`);
-      return;
-    }
-
-    console.log(`[Socket] ✅ Host approved ${waiter.name}`);
-    dbg('Approve', `Room waiting list before: ${JSON.stringify(Object.keys(room.waitingUsers))}`);
-    room.users[targetSocketId] = { ...waiter, role: 'participant' };
-    delete room.waitingUsers[targetSocketId];
-    io.to(targetSocketId).emit('join-approved', { role: 'participant' });
-    dbg('Approve', `✅ Emitted join-approved to ${targetSocketId}`);
-  });
-
-  socket.on('reject-join', ({ roomId, userId: targetSocketId }) => {
+  socket.on('approve-join', ({ roomId, socketId }) => {
     const room = rooms[roomId];
     if (!room || room.hostSocketId !== socket.id) return;
 
-    console.log(`[Socket] ❌ Host rejected join request for ${targetSocketId}`);
-    dbg('Reject', `Removing ${targetSocketId} from waiting list`);
-    delete room.waitingUsers[targetSocketId];
-    io.to(targetSocketId).emit('join-rejected');
-    dbg('Reject', `❌ Emitted join-rejected to ${targetSocketId}`);
+    const waiter = room.waitingUsers[socketId];
+    if (!waiter) return;
+
+    console.log(`[Socket] ✅ Host approved ${waiter.name}`);
+    delete room.waitingUsers[socketId];
+    
+    io.sockets.sockets.get(socketId)?.join(roomId);
+    io.to(socketId).emit('join-approved', { roomId, role: 'participant' });
+  });
+
+  socket.on('reject-join', ({ socketId }) => {
+    console.log(`[Socket] ❌ Host rejected join request for ${socketId}`);
+    // Clear from waiting list if exists in any room
+    for (let rId in rooms) {
+      if (rooms[rId].waitingUsers[socketId]) {
+         delete rooms[rId].waitingUsers[socketId];
+      }
+    }
+    io.to(socketId).emit('join-rejected');
   });
 
   // ═══════════════════════════════════════════════

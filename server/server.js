@@ -24,8 +24,7 @@ const server = http.createServer(app);
 // Enable CORS
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  credentials: true
 }));
 app.use(express.json());
 
@@ -75,8 +74,7 @@ app.use((err, req, res, next) => {
 // Socket.io setup
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: '*'
   }
 });
 

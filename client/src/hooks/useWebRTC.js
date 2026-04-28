@@ -246,10 +246,21 @@ export default function useWebRTC(roomId, user) {
       setJoinState('waiting');
     });
 
+    const joinMeetingRoom = () => {
+      if (sock.roomIdEmitted) return;
+      sock.roomIdEmitted = true;
+      sock.emit('join-room', { 
+        roomId: roomId, 
+        userId: user._id || user.userId, 
+        name: user.name
+      });
+    };
+
     sock.on('join-approved', ({ role }) => {
       console.log('[WebRTC] 🎉 Join approved as', role);
       setJoinState('approved');
       setHostStatus(role === 'host');
+      joinMeetingRoom();
     });
 
     sock.on('join-rejected', () => {
@@ -259,11 +270,11 @@ export default function useWebRTC(roomId, user) {
 
     console.log("Listening for join requests (Host side)");
     
-    sock.on('join-request', ({ fromSocketId, fromName, fromUserId }) => {
-      console.log("Join request received (client):", { fromName, fromUserId });
+    sock.on('join-request', ({ socketId, name, userId }) => {
+      console.log("Join request received (client):", { name, userId });
       setJoinRequests(prev => {
-        if (prev.find(r => r.socketId === fromSocketId)) return prev;
-        return [...prev, { socketId: fromSocketId, fromName, fromUserId }];
+        if (prev.find(r => r.socketId === socketId)) return prev;
+        return [...prev, { socketId, fromName: name, fromUserId: userId }];
       });
     });
 
@@ -510,7 +521,7 @@ export default function useWebRTC(roomId, user) {
         // PHASE 1: VERIFY ROOM JOIN (CRITICAL)
         if (!isJoinedRef.current || joinState === 'idle') {
           console.log("Joining room:", roomId);
-          socketRef.current.emit('join-room', { 
+          socketRef.current.emit('request-join', { 
             roomId: roomId, 
             userId: user._id || user.userId, 
             name: user.name
@@ -728,13 +739,13 @@ export default function useWebRTC(roomId, user) {
 
   const approveJoin = useCallback((socketId) => {
     console.log('[WebRTC] ✅ Approving join:', socketId);
-    socketRef.current?.emit('approve-join', { roomId, userId: socketId });
+    socketRef.current?.emit('approve-join', { roomId, socketId });
     setJoinRequests(prev => prev.filter(r => r.socketId !== socketId));
   }, [roomId]);
 
   const rejectJoin = useCallback((socketId) => {
     console.log('[WebRTC] ❌ Rejecting join:', socketId);
-    socketRef.current?.emit('reject-join', { roomId, userId: socketId });
+    socketRef.current?.emit('reject-join', { socketId });
     setJoinRequests(prev => prev.filter(r => r.socketId !== socketId));
   }, [roomId]);
 
