@@ -3,10 +3,12 @@ import { MicOff, Mic, Shield } from 'lucide-react';
 
 export default function VideoTile({ stream, name, isLocal, isMuted, isVideoOff, isHandRaised, isActiveSpeaker, isHost, isScreenSharing }) {
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
 
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream || null;
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.warn('Media play blocked:', e));
     }
   }, [stream]);
 
@@ -18,38 +20,26 @@ export default function VideoTile({ stream, name, isLocal, isMuted, isVideoOff, 
         ${isActiveSpeaker ? 'border-blue-500 ring-4 ring-blue-500/20' : 'border-transparent hover:border-white/10'}
       `}
     >
-      {/* ── Audio element (Always mounted for remote users to ensure continuous sound) ── */}
-      {!isLocal && stream && (
-        <audio
-          ref={(el) => {
-            if (el) el.srcObject = stream;
-          }}
-          autoPlay
-          playsInline
-          muted={false}
-          style={{ display: 'none' }}
-        />
-      )}
-
-      {/* ── Video or Avatar ───────────────────────────────── */}
-      {isVideoOff || !stream ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#202124] to-[#2d2e30]">
+      {/* ── Avatar Overlay (covers video when off) ──────────────── */}
+      {(isVideoOff || !stream) && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gradient-to-br from-[#202124] to-[#2d2e30]">
           <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-blue-800 rounded-full flex items-center justify-center text-2xl font-bold text-white shadow-xl border-2 border-blue-400/20">
             {name?.charAt(0).toUpperCase() || 'U'}
           </div>
           <span className="mt-3 text-sm text-gray-400 max-w-[80%] truncate">{name}</span>
         </div>
-      ) : (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal}
-          className={`w-full h-full object-cover ${
-            isLocal && !isScreenSharing ? 'scale-x-[-1]' : ''
-          }`}
-        />
       )}
+
+      {/* ── Video Element (Always mounted to ensure audio plays) ── */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocal}
+        className={`w-full h-full object-cover ${
+          isLocal && !isScreenSharing ? 'scale-x-[-1]' : ''
+        } ${isVideoOff || !stream ? 'opacity-0' : 'opacity-100'}`}
+      />
 
       {/* ── Bottom name bar ───────────────────────────────── */}
       <div className="absolute bottom-0 left-0 right-0 px-3 py-2.5 bg-gradient-to-t from-black/80 to-transparent flex items-center gap-2">

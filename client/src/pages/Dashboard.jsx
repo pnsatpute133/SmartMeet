@@ -238,13 +238,13 @@ export default function Dashboard() {
         {/* Feature Illustrator Right */}
         <div className="flex-1 hidden lg:flex flex-col items-center justify-center p-10 bg-blue-600/5 rounded-[60px] border border-blue-500/10 shadow-[0_0_80px_rgba(37,99,235,0.05)]">
            <img 
-             src="https://www.gstatic.com/meet/user_edu_get_a_link_light_90683e5491e0a29906646bc16dfff72e.svg" 
-             className="w-full max-w-sm mb-12 drop-shadow-2xl" 
-             alt="illustration" 
+             src="/hero-illustration.jpg" 
+             className="w-full rounded-3xl shadow-2xl mb-10 border border-blue-500/20 object-cover" 
+             alt="SmartMeet AI Assistant" 
            />
-           <h3 className="text-2xl font-bold mb-4 text-gray-100 text-center">Get a link you can share</h3>
+           <h3 className="text-2xl font-bold mb-4 text-gray-100 text-center">Your AI Assistant for Every Meeting</h3>
            <p className="text-gray-400 text-center max-w-xs leading-relaxed text-sm">
-             Click <span className="text-blue-500 font-semibold">New meeting</span> to get a link you can send to people you want to meet with.
+             SmartMeet brings powerful AI-driven engagement tracking right into your virtual boardroom.
            </p>
         </div>
       </main>

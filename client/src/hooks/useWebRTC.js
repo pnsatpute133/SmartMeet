@@ -78,7 +78,10 @@ export default function useWebRTC(roomId, user) {
 
     const pc = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.services.mozilla.com' }
       ]
     });
 
@@ -86,9 +89,16 @@ export default function useWebRTC(roomId, user) {
     setPeerStreams(prev => ({ ...prev, [remoteSocketId]: remoteStream }));
 
     pc.ontrack = (evt) => {
-      console.log(`[WebRTC] 📹 Remote track from: ${remoteSocketId}`);
-      evt.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
-      detectActiveSpeaker(remoteStream, remoteSocketId);
+      console.log(`[WebRTC] 📹 Remote track from: ${remoteSocketId} | kind: ${evt.track.kind}`);
+      
+      // Add the specific track that triggered this event
+      remoteStream.addTrack(evt.track);
+      
+      // Force React state update by creating a new MediaStream reference
+      const updatedStream = new MediaStream(remoteStream.getTracks());
+      setPeerStreams(prev => ({ ...prev, [remoteSocketId]: updatedStream }));
+      
+      detectActiveSpeaker(updatedStream, remoteSocketId);
     };
 
     pc.onicecandidate = ({ candidate }) => {
@@ -167,10 +177,8 @@ export default function useWebRTC(roomId, user) {
     try {
       if (offerCollision) {
         // Polite side: rollback own offer, then accept theirs
-        await Promise.all([
-          pc.setLocalDescription({ type: 'rollback' }),
-          pc.setRemoteDescription(new RTCSessionDescription(offerSdp)),
-        ]);
+        await pc.setLocalDescription({ type: 'rollback' });
+        await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
       } else {
         await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
       }
@@ -290,8 +298,7 @@ export default function useWebRTC(roomId, user) {
     // PHASE 5: HANDLE NEW USER JOIN
     sock.on("user-joined", ({ userId, name }) => {
       console.log("User joined:", userId);
-      console.log("Creating peer:", userId);
-      createPeerConnectionAndOffer(userId);
+      // Wait for incoming offer to prevent collision
       
       // Update UI state
       addParticipant({ socketId: userId, userId, name });
@@ -337,8 +344,9 @@ export default function useWebRTC(roomId, user) {
 
     // ── EVENT: ICE candidate ───────────────────────────────
     sock.on('ice-candidate', ({ candidate, fromId }) => {
-      const pc = peersRef.current[fromId];
-      if (!pc || !candidate) return;
+      // Ensure peer exists even if ICE candidate arrives slightly before the offer
+      const pc = getOrCreatePeer(fromId);
+      if (!candidate) return;
 
       // Guard: only add candidate once remote description is set
       if (pc.remoteDescription && pc.remoteDescription.type) {
@@ -350,7 +358,7 @@ export default function useWebRTC(roomId, user) {
           pendingCandidates.current[fromId] = [];
         }
         pendingCandidates.current[fromId].push(candidate);
-        console.log(`[WebRTC] 📦 Buffered ICE candidate for ${fromId} (remote desc not ready yet)`);
+        console.log(`[WebRTC] 📦 Buffered early ICE candidate for ${fromId}`);
       }
     });
 
