@@ -157,7 +157,7 @@ export default function Dashboard() {
         {/* Actions Left */}
         <div className="flex-1 max-w-xl text-center lg:text-left">
           <h1 className="text-5xl lg:text-7xl font-bold leading-[1.1] mb-10 text-gray-50 tracking-tight">
-            Premium video meetings. <span className="text-blue-500">Free.</span>
+            Premium video meetings.
           </h1>
           <p className="text-gray-400 text-xl mb-12 font-light leading-relaxed max-w-lg">
             Built for secure business meetings, SmartMeet is now available for everyone, anywhere.
@@ -236,10 +236,10 @@ export default function Dashboard() {
         </div>
 
         {/* Feature Illustrator Right */}
-        <div className="flex-1 hidden lg:flex flex-col items-center justify-center p-10 bg-blue-600/5 rounded-[60px] border border-blue-500/10 shadow-[0_0_80px_rgba(37,99,235,0.05)]">
+        <div className="flex-1 hidden lg:flex flex-col items-center justify-center p-10 bg-transparent">
            <img 
              src="/hero-illustration.jpg" 
-             className="w-full rounded-3xl shadow-2xl mb-10 border border-blue-500/20 object-cover" 
+             className="w-full max-w-[320px] mb-10 object-cover hover:scale-105 transition-transform duration-500" 
              alt="SmartMeet AI Assistant" 
            />
            <h3 className="text-2xl font-bold mb-4 text-gray-100 text-center">Your AI Assistant for Every Meeting</h3>
