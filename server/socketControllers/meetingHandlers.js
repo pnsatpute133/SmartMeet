@@ -28,6 +28,9 @@ function roomSnap(roomId) {
 // }
 const rooms = {};
 
+// ── Participant cap ───────────────────────────────────────────────────────
+const MAX_PARTICIPANTS = 30;
+
 // Helper: Save final report to DB (Attendance + AI Summary)
 async function saveFinalReport(roomId, roomData) {
   try {
@@ -103,6 +106,14 @@ module.exports = (io, socket) => {
       return handleJoin({ roomId, userId, name });
     }
 
+    // ── Capacity check ──────────────────────────────────────────────────────
+    const currentCount = Object.keys(rooms[roomId].users).length;
+    if (currentCount >= MAX_PARTICIPANTS) {
+      console.warn(`[Socket] 🚫 Room ${roomId} is full (${currentCount}/${MAX_PARTICIPANTS}). Rejecting ${name}.`);
+      socket.emit('room-full', { max: MAX_PARTICIPANTS });
+      return;
+    }
+
     const hostSocketId = rooms[roomId].hostSocketId;
     rooms[roomId].waitingUsers[socket.id] = {
       socketId: socket.id,
@@ -121,6 +132,16 @@ module.exports = (io, socket) => {
 
   async function handleJoin({ roomId, userId, name, joinState }) {
     if (!roomId || !userId || !name) return;
+
+    // ── Capacity check (skip for the very first join that creates the room) ──
+    if (rooms[roomId]) {
+      const currentCount = Object.keys(rooms[roomId].users).length;
+      if (currentCount >= MAX_PARTICIPANTS) {
+        console.warn(`[Socket] 🚫 Room ${roomId} is full (${currentCount}/${MAX_PARTICIPANTS}). Rejecting ${name}.`);
+        socket.emit('room-full', { max: MAX_PARTICIPANTS });
+        return;
+      }
+    }
 
     // PHASE 2: BACKEND ROOM JOIN FIX
     socket.join(roomId);

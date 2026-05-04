@@ -276,6 +276,12 @@ export default function useWebRTC(roomId, user) {
       setJoinState('rejected');
     });
 
+    sock.on('room-full', ({ max }) => {
+      console.warn(`[WebRTC] 🚫 Room is full (max ${max} participants)`);
+      alert(`This meeting is full. The maximum number of participants (${max}) has been reached.`);
+      window.location.href = '/';
+    });
+
     console.log("Listening for join requests (Host side)");
     
     sock.on('join-request', ({ socketId, name, userId }) => {
@@ -483,6 +489,7 @@ export default function useWebRTC(roomId, user) {
       sock.off('waiting-room');
       sock.off('join-approved');
       sock.off('join-rejected');
+      sock.off('room-full');
       sock.off('join-request');
       sock.off('all-users');
       sock.off('user-joined');
