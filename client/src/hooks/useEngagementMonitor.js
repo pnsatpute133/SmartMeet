@@ -17,11 +17,47 @@ import { SERVER_URL, AI_URL } from '../config';
 
 const AI_SERVER_URL  = import.meta.env.VITE_AI_SERVER_URL  || AI_URL;
 const API_SERVER_URL = import.meta.env.VITE_API_SERVER_URL || SERVER_URL;
-const CAPTURE_MS     = 1000;    // 1 frame every 1 second (Phase 8)
-const JPEG_QUALITY   = 0.50;
+const CAPTURE_MS     = 500;     // Issue 1: fast capture — 2 frames/sec
+const JPEG_QUALITY   = 0.45;    // slightly lower quality = faster transfer
 const CANVAS_WIDTH   = 320;
 const MAX_RETRIES    = 3;
-const TICK_SEC       = 1.2;       // seconds each sample represents (Phase 11)
+const TICK_SEC       = 0.6;     // adjusted for 500ms interval
+const HISTORY_SIZE   = 5;      // Phase 7: short buffer
+const CONFIRM_THRESH = 3;       // Phase 7: confirm if >= 3
+
+// Phase 7 & 11: Priority order — higher index = highest priority
+const STATUS_PRIORITY = [
+  'attentive',
+  'distracted',
+  'drowsy',
+  'phone',
+  'multiple_faces',
+  'no_face',
+];
+
+// Phase 1: Standard Enum
+const STATUS_LABEL = {
+  attentive:        'Attentive',
+  distracted:       'Distracted',
+  phone:            'Using Phone',
+  drowsy:           'Sleepy',
+  no_face:          'Not in Frame',
+  multiple_faces:   'Multiple Faces',
+  idle:             'Monitoring…',
+  error:            'AI Offline',
+};
+
+/** Returns highest-priority status from last N frames */
+function resolveStatus(history) {
+  if (!history.length) return 'idle';
+  const counts = {};
+  history.forEach(s => { counts[s] = (counts[s] || 0) + 1; });
+  for (let i = STATUS_PRIORITY.length - 1; i >= 0; i--) {
+    const s = STATUS_PRIORITY[i];
+    if ((counts[s] || 0) >= CONFIRM_THRESH) return s;
+  }
+  return history[history.length - 1];
+}
 
 // ── Debug Logger ──────────────────────────────────────────────────────────
 const DEBUG = true;
@@ -36,26 +72,27 @@ function analysePatterns(tracker) {
   const { 
     attentiveTime, distractedTime, phoneTime,
     multiplePeopleTime, drowsyTime, poorPostureTime,
-    speakingTime, speakingMutedTime,
+    speakingTime, speakingMutedTime, noFaceTime,
     totalTime, name 
   } = tracker;
 
   if (!totalTime) return { summary: 'No data yet', warnings: [], engagementScore: 0 };
 
-  const attPct    = Math.round(((attentiveTime + speakingTime) / totalTime) * 100);
-  const distPct   = Math.round((distractedTime     / totalTime) * 100);
-  const drowsyPct = Math.round((drowsyTime         / totalTime) * 100);
+  const attPct    = Math.round((attentiveTime / totalTime) * 100);
+  const distPct   = Math.round((distractedTime / totalTime) * 100);
+  const drowsyPct = Math.round((drowsyTime / totalTime) * 100);
+  const phonePct  = Math.round((phoneTime / totalTime) * 100);
+  const noFacePct = Math.round((noFaceTime / totalTime) * 100);
 
   const warnings = [];
   if (distractedTime  > 40) warnings.push(`Student distracted (${distPct}%)`);
   if (phoneTime       > 10) warnings.push(`Phone usage detected!`);
   if (drowsyTime      > 15) warnings.push(`Student looks drowsy.`);
-  if (speakingMutedTime > 6) warnings.push(`Speaking while muted.`);
   if (attPct          < 40) warnings.push(`Very low focus.`);
 
   const summary =
     `${name} is ${attPct}% engaged. ` +
-    (speakingMutedTime > 4 ? `🔇 Muted & Speaking. ` : '') +
+    (phonePct > 10 ? `📵 Phone usage. ` : '') +
     (drowsyPct > 10 ? `😴 Sleepy. ` : '');
 
   return { summary, warnings, engagementScore: attPct };
@@ -86,6 +123,8 @@ function makeTracker(userId, name) {
 
 export default function useEngagementMonitor({
   localStream,
+  peerStreams = {},   // { socketId: MediaStream } — for host-side peer monitoring
+  participants = [],  // participant list for name lookup
   socket,
   userId,
   roomId,
@@ -116,65 +155,66 @@ export default function useEngagementMonitor({
   const lastStatusRef = useRef('idle');
   const myTrackerRef  = useRef(myTracker);
 
-  // ── AI detection stability (Phase 1 & 9) ──────────────────────────────────
-  const detectionHistoryRef = useRef([]);
-  const lastAlertRef = useRef(0); // Phase 6 cooldown
+  // ── Peer monitoring (host-side) ──────────────────────────────
+  const peerVideoEls  = useRef({}); // { socketId: HTMLVideoElement }
+  const peerIntervals = useRef({}); // { socketId: intervalId }
+  const peerCanvases  = useRef({}); // { socketId: HTMLCanvasElement }
+  const peerHistories = useRef({}); // { socketId: string[] } — smoothing buffers
+
+  // Issue 2: Smoothing buffer for self
+  const detectionHistoryRef = useRef([]);  // string[]
+  // Issue 5: Popup cooldown — track last time
+  const lastAlertRef    = useRef(0);
+  const prevStatusRef   = useRef('idle');
 
   // Keep ref in sync
   useEffect(() => { myTrackerRef.current = myTracker; }, [myTracker]);
 
-  // PHASE 5: FIX POPUP BLOCKING ISSUE
+  // Phase 12: Popup Cooldown (No Spam)
   const showPopup = useCallback((msg) => {
-    // PHASE 6: ADD COOLDOWN (2000ms)
-    if (Date.now() - lastAlertRef.current < 2000) return;
-
-    setAlert(msg);
-    lastAlertRef.current = Date.now();
+    const now = Date.now();
+    if (now - lastAlertRef.current > 1500) {
+      setAlert(msg);
+      lastAlertRef.current = now;
+    }
   }, []);
 
-  // PHASE 4: ALERT MAPPING
+  // Phase 4: Popup Messages
   const triggerAlert = useCallback((status) => {
     if (isHost) return;
     
-    console.log("Triggering alert:", status); // Phase 7 log
-
     switch(status) {
       case "phone":
         showPopup("Stop using phone");
         break;
       case "distracted":
-      case "looking_sideways":
-      case "looking_down":
         showPopup("Pay attention");
         break;
       case "no_face":
-        showPopup("Stay in front of camera");
+        showPopup("Stay in frame");
         break;
       case "drowsy":
-        showPopup("You seem sleepy 😴");
-        break;
-      case "looking_away":
-        showPopup("Please look at the screen");
+        showPopup("Wake up and pay attention 😴");
         break;
       case "multiple_faces":
-      case "multiple_people":
-        showPopup("Multiple people detected");
+        showPopup("Multiple persons detected");
         break;
-      case "talking_muted":
-      case "speaking_muted":
-        showPopup("You are speaking while muted");
+      case "attentive":
+        showPopup("Good! You are attentive");
         break;
       default:
         break;
     }
   }, [isHost, showPopup]);
 
-  // PHASE 3: TRIGGER ALERT IMMEDIATELY
+  // Phase 3: Instant Popup System (No Delay)
   useEffect(() => {
-    if (!status || status === 'idle' || status === 'attentive' || status === 'speaking') return;
-    
-    console.log("AI status:", status); // Phase 7 log
-    triggerAlert(status);
+    if (status !== prevStatusRef.current) {
+      if (status !== 'idle' && status !== 'error') {
+        triggerAlert(status);
+      }
+      prevStatusRef.current = status;
+    }
   }, [status, triggerAlert]);
 
   // Create hidden canvas + video
@@ -196,22 +236,14 @@ export default function useEngagementMonitor({
   const applyTick = useCallback((prev, status) => {
     const next = { ...prev };
     next.totalTime += TICK_SEC;
+    // Phase 8: Engagement Tracking
     switch (status) {
-      case 'attentive':        next.attentiveTime       += TICK_SEC; break;
-      case 'distracted':       
-      case 'looking_sideways': 
-      case 'looking_down':     
-      case 'drowsy':           
-      case 'no_face':          
-        next.distractedTime      += TICK_SEC; // Phase 8: Distraction Logic
-        if (status === 'drowsy') next.drowsyTime += TICK_SEC;
-        if (status === 'no_face') next.noFaceTime += TICK_SEC;
-        break;
-      case 'phone':            next.phoneTime           += TICK_SEC; break;
-      case 'multiple_faces':
-      case 'multiple_people':  next.multiplePeopleTime  += TICK_SEC; break;
-      case 'speaking':         next.speakingTime        += TICK_SEC; break;
-      case 'speaking_muted':   next.speakingMutedTime   += TICK_SEC; break;
+      case 'attentive':      next.attentiveTime       += TICK_SEC; break;
+      case 'distracted':     next.distractedTime      += TICK_SEC; break;
+      case 'drowsy':         next.drowsyTime          += TICK_SEC; break;
+      case 'no_face':        next.noFaceTime          += TICK_SEC; break;
+      case 'phone':          next.phoneTime           += TICK_SEC; break;
+      case 'multiple_faces': next.multiplePeopleTime  += TICK_SEC; break;
       default: break;
     }
     next.lastStatus = status;
@@ -254,64 +286,56 @@ export default function useEngagementMonitor({
     const b64Frame = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
     dbg('Frame', `Captured ${Math.round(b64Frame.length / 1024)}KB frame | userId=${userId} | roomId=${roomId}`);
 
-    console.log(`[AI] 📤 Sending frame for user: ${userId}`);
     const t0 = Date.now();
     try {
       const token = localStorage.getItem('token');
-      
-      if (!navigator.onLine) {
-        showPopup("No internet connection");
-        return;
-      }
-      
-      // PHASE 1: VERIFY AI RESPONSE FLOW
+      if (!navigator.onLine) { showPopup('No internet connection'); return; }
+
       const res = await axios.post(`${AI_URL}/detect`, {
-        userId,
-        roomId,
-        frame: b64Frame,
-        ts: Date.now(),
-        isMuted
-      }, {
-        headers: { 
-          'Authorization': token ? `Bearer ${token}` : ''
-        }
-      });
+        userId, roomId, frame: b64Frame, ts: Date.now(), isMuted
+      }, { headers: { 'Authorization': token ? `Bearer ${token}` : '' } });
 
       const data = res.data;
-      console.log("AI Response:", data); // Mandatory log
       const latency = Date.now() - t0;
-      dbg('Frame', `✅ status=${data.status} conf=${data.confidence} latency=${latency}ms`);
+      dbg('Frame', `✅ raw=${data.status} conf=${data.confidence} latency=${latency}ms`);
       failCountRef.current = 0;
 
-      // Phase 2: Map Detection to State
-      setStatus(data.status);
+      // Issue 2: Push to smoothing buffer
+      const hist = detectionHistoryRef.current;
+      hist.push(data.status);
+      if (hist.length > HISTORY_SIZE) hist.shift();
+
+      // Issue 7: Resolve confirmed status via priority
+      const confirmedStatus = resolveStatus(hist);
+      dbg('Frame', `confirmed=${confirmedStatus} (buffer=${hist.length})`);
+
+      setStatus(confirmedStatus);
       setInsights(data.insights || null);
       setConfidence(data.confidence || 0);
-      lastStatusRef.current = data.status;
+      lastStatusRef.current = confirmedStatus;
 
       setMyTracker(prev => {
-        const next = applyTick(prev, data.status);
-        dbg('Tracker', `Updated: attentive=${next.attentiveTime}s dist=${next.distractedTime}s score=${next.engagementScore}%`);
+        const next = applyTick(prev, confirmedStatus);
         socket?.emit('ai-update', { userId, roomId, tracker: next });
         return next;
       });
 
+      // Emit with confirmed status
       socket?.emit('ai-alert', {
         userId, roomId,
-        status:     data.status,
-        alert:      null, // Alert handled locally for better reactivity
+        status:     confirmedStatus,
+        alert:      null,
         confidence: data.confidence,
         insights:   data.insights,
       });
 
     } catch (err) {
-      console.log("API ERROR:", err.message);
       dbg('Frame', `❌ Error #${failCountRef.current + 1}: ${err.message}`);
       failCountRef.current += 1;
       if (failCountRef.current >= MAX_RETRIES) {
-        dbg('Frame', `Max retries hit (${MAX_RETRIES}), stopping AI monitor`);
-        setIsRunning(false);
-        setStatus('error');
+        setIsRunning(false); 
+        // Fallback to attentive or let Host's broadcast override it. Do not show "AI Offline".
+        setStatus('attentive'); 
       }
     }
   }, [localStream, isVideoOff, isMuted, socket, userId, roomId, applyTick, aiEnabled, isHost]);
@@ -329,8 +353,9 @@ export default function useEngagementMonitor({
 
     dbg('Monitor', `🟢 Starting AI monitor | userId=${userId} | roomId=${roomId} | interval=${CAPTURE_MS}ms`);
     failCountRef.current = 0;
+    detectionHistoryRef.current = []; // reset buffer on start
     setIsRunning(true);
-    const warmup = setTimeout(analyseFrame, 600);
+    const warmup = setTimeout(analyseFrame, 200); // Issue 1: fast warmup
     intervalRef.current = setInterval(analyseFrame, CAPTURE_MS);
 
     return () => {
@@ -340,17 +365,146 @@ export default function useEngagementMonitor({
     };
   }, [aiEnabled, localStream, userId, roomId, analyseFrame]);
 
+  // ── HOST-SIDE: Run AI on every peer stream ─────────────────────────────
+  useEffect(() => {
+    if (!isHost || !aiEnabled) {
+      // Stop and clean up all peer monitors when AI is off or not host
+      Object.values(peerIntervals.current).forEach(clearInterval);
+      peerIntervals.current = {};
+      Object.values(peerVideoEls.current).forEach(el => { try { el.remove(); } catch {} });
+      peerVideoEls.current = {};
+      peerCanvases.current = {};
+      return;
+    }
+
+    const currentPeerIds = new Set(Object.keys(peerStreams));
+
+    // Stop intervals for peers who left
+    Object.keys(peerIntervals.current).forEach(sid => {
+      if (!currentPeerIds.has(sid)) {
+        clearInterval(peerIntervals.current[sid]);
+        delete peerIntervals.current[sid];
+        try { peerVideoEls.current[sid]?.remove(); } catch {}
+        delete peerVideoEls.current[sid];
+        delete peerCanvases.current[sid];
+        dbg('PeerMonitor', `🔴 Stopped peer monitor for ${sid}`);
+      }
+    });
+
+    // Start monitors for new peers (only non-host participants)
+    Object.entries(peerStreams).forEach(([socketId, stream]) => {
+      if (peerIntervals.current[socketId]) return; // already monitoring
+      if (!stream || stream.getVideoTracks().length === 0) return;
+
+      const participant = participants.find(p => p.socketId === socketId);
+      // Skip if the peer is the host
+      if (participant?.role === 'host') return;
+
+      const peerUserId = participant?.userId || socketId;
+      const peerName   = participant?.name   || 'Participant';
+
+      // Create hidden video element for this peer
+      const vid = document.createElement('video');
+      vid.muted = true; vid.autoplay = true; vid.playsInline = true;
+      vid.style.display = 'none';
+      document.body.appendChild(vid);
+      vid.srcObject = stream;
+      vid.play().catch(() => {});
+      peerVideoEls.current[socketId] = vid;
+
+      // Create canvas for frame capture
+      const canvas = document.createElement('canvas');
+      canvas.width  = CANVAS_WIDTH;
+      canvas.height = Math.round(CANVAS_WIDTH * 0.5625);
+      peerCanvases.current[socketId] = canvas;
+
+      dbg('PeerMonitor', `🟢 Starting peer monitor for ${peerName} (${socketId})`);
+
+      // Initialize smoothing buffer for this peer
+      peerHistories.current[socketId] = [];
+
+      // Run AI capture on an interval (peers at 1s to reduce server load)
+      const intervalId = setInterval(async () => {
+        const el = peerVideoEls.current[socketId];
+        const cv = peerCanvases.current[socketId];
+        if (!el || !cv || el.readyState < 2) return;
+
+        try {
+          cv.getContext('2d').drawImage(el, 0, 0, cv.width, cv.height);
+          const b64Frame = cv.toDataURL('image/jpeg', JPEG_QUALITY);
+          const token = localStorage.getItem('token');
+
+          const res = await fetch(`${AI_SERVER_URL}/detect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': token ? `Bearer ${token}` : '' },
+            body: JSON.stringify({ userId: peerUserId, roomId, frame: b64Frame, ts: Date.now(), isMuted: false })
+          });
+
+          if (!res.ok) return;
+          const data = await res.json();
+
+          // Issue 2: Smoothing buffer per peer
+          const ph = peerHistories.current[socketId] || [];
+          ph.push(data.status);
+          if (ph.length > HISTORY_SIZE) ph.shift();
+          peerHistories.current[socketId] = ph;
+          const confirmedStatus = resolveStatus(ph);
+
+          dbg('PeerMonitor', `${peerName}: raw=${data.status} confirmed=${confirmedStatus}`);
+
+          // Issue 8: Update allTrackers with proper time accumulation
+          setAllTrackers(prev => {
+            const existing = prev[socketId] || makeTracker(peerUserId, peerName);
+            const next = applyTick({ ...existing, name: peerName }, confirmedStatus);
+            
+            // Host broadcasts the computed status to the participant!
+            socket?.emit('ai-update', { userId: peerUserId, roomId, tracker: next, socketId });
+            socket?.emit('ai-alert', {
+              userId: peerUserId, roomId, socketId,
+              status: confirmedStatus,
+              alert: null,
+              confidence: data.confidence,
+              insights: data.insights
+            });
+            
+            return { ...prev, [socketId]: next };
+          });
+
+          setPeerAiData(prev => ({
+            ...prev,
+            [socketId]: { status: confirmedStatus, alert: null, confidence: data.confidence, insights: data.insights }
+          }));
+        } catch (err) {
+          dbg('PeerMonitor', `Error analyzing peer ${peerName}: ${err.message}`);
+        }
+      }, CAPTURE_MS * 2); // peers at 1s interval
+
+      peerIntervals.current[socketId] = intervalId;
+    });
+
+    return () => {
+      // Cleanup on effect re-run (aiEnabled/peerStreams changed)
+    };
+  }, [isHost, aiEnabled, peerStreams, participants, roomId]);
+
   // ── Listen for peer ai-update events (host gets all trackers) ─────────
   useEffect(() => {
     if (!socket) return;
     const handle = (data) => {
       if (!data?.tracker || !data.socketId) return;
       dbg('HostTracker', `Received ai-update | socketId=${data.socketId} | status=${data.tracker.lastStatus} | score=${data.tracker.engagementScore}%`);
+      
+      // If this is my tracker sent by the host, sync my local state!
+      if (data.userId === userId && !isHost) {
+        setStatus(data.tracker.lastStatus);
+        setMyTracker(data.tracker);
+      }
+      
       setAllTrackers(prev => ({ ...prev, [data.socketId]: data.tracker }));
     };
     socket.on('ai-update', handle);
     return () => socket.off('ai-update', handle);
-  }, [socket]);
+  }, [socket, userId, isHost]);
 
   // ── Listen for ai-alert (real-time status per participant) ─────────────
   useEffect(() => {
@@ -358,6 +512,12 @@ export default function useEngagementMonitor({
     const handleAlert = (data) => {
       if (!data?.socketId) return;
       dbg('PeerAI', `ai-alert | socketId=${data.socketId} | status=${data.status} | conf=${data.confidence}`);
+      
+      // If the host is telling me my status, update my UI!
+      if (data.userId === userId && !isHost) {
+        setStatus(data.status);
+      }
+      
       setPeerAiData(prev => ({
         ...prev,
         [data.socketId]: {
@@ -370,7 +530,7 @@ export default function useEngagementMonitor({
     };
     socket.on('ai-alert', handleAlert);
     return () => socket.off('ai-alert', handleAlert);
-  }, [socket]);
+  }, [socket, userId, isHost]);
 
   // ── Save meeting report to backend ────────────────────────────────────
   const saveMeetingReport = useCallback(async ({

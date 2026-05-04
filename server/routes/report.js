@@ -107,13 +107,13 @@ router.get('/:meetingId/csv', protect, async (req, res) => {
       return {
         'Name':             p.name,
         'Total Time':       `${p.totalTime}s`,
-        'Attentive %':      `${p.engagementScore}%`,
+        'Attentive %':      `${Math.round((p.attentiveTime / total) * 100)}%`,
         'Distracted %':     `${Math.round((p.distractedTime / total) * 100)}%`,
         'Phone %':          `${Math.round((p.phoneTime / total) * 100)}%`,
         'Drowsy %':         `${Math.round(((p.drowsyTime || 0) / total) * 100)}%`,
-        'Multiple Faces %': `${Math.round(((p.multiplePeopleTime || 0) / total) * 100)}%`,
+        'No Face %':        `${Math.round(((p.noFaceTime || 0) / total) * 100)}%`,
+        'Multiple Faces Count': Math.round((p.multiplePeopleTime || 0) / 0.6), // rough count based on tick
         'Warnings':         (p.warnings || []).join(' | '),
-        'Summary':          p.summary || '',
       };
     });
 
@@ -125,16 +125,16 @@ router.get('/:meetingId/csv', protect, async (req, res) => {
         'Distracted %': '0%',
         'Phone %': '0%',
         'Drowsy %': '0%',
-        'Multiple Faces %': '0%',
+        'No Face %': '0%',
+        'Multiple Faces Count': 0,
         'Warnings': 'None',
-        'Summary': 'Report has not been saved yet or no participants were tracked.',
       });
     }
 
     const fields = [
       'Name', 'Total Time', 'Attentive %',
       'Distracted %', 'Phone %', 'Drowsy %',
-      'Multiple Faces %', 'Warnings', 'Summary',
+      'No Face %', 'Multiple Faces Count', 'Warnings',
     ];
 
     const parser = new Parser({ fields });

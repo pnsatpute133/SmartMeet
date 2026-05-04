@@ -182,7 +182,9 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
     
     if not results.face_landmarks:
         logger.debug("[AI] No face landmarks found by MediaPipe")
-        return {"yaw": 0.0, "pitch": 0.0, "facing_forward": False, "ear": 0.0, "mar": 0.0, "is_drowsy": False, "posture_score": 0}
+        return {"yaw": 0.0, "pitch": 0.0, "facing_forward": False, "ear": 0.0, "mar": 0.0, "is_drowsy": False, "posture_score": 0, "face_count": 0}
+
+    face_count = len(results.face_landmarks)
 
     lm = results.face_landmarks[0]
 
@@ -231,7 +233,8 @@ def estimate_advanced_features(img_rgb: np.ndarray) -> dict:
         "is_drowsy": is_drowsy,
         "is_speaking": is_speaking,
         "posture_score": posture_score,
-        "slumping": posture_score < 70
+        "slumping": posture_score < 70,
+        "face_count": face_count
     }
     logger.debug(
         f"[AI] MediaPipe: yaw={features['yaw']}° pitch={features['pitch']}° "
@@ -269,14 +272,12 @@ def classify_behaviour(
     frame_h: int
 ) -> Tuple[str, Optional[str], float]:
     """
-    Priority-based behavior classification with smoothing (Phase 13):
-    Only change state if detected continuously for ~1.5 - 2 seconds.
+    Instantaneous behavior classification. 
+    Smoothing is handled by the frontend's 5-frame buffer.
     """
-    now = time.time()
-    
     # Preliminary YOLO parsing
-    persons = []
     phones = []
+    persons = []
     
     for box in boxes:
         cls = int(box.cls[0])
@@ -285,80 +286,53 @@ def classify_behaviour(
         box_w, box_h = xyxy[2] - xyxy[0], xyxy[3] - xyxy[1]
         area_pct = (box_w * box_h) / (frame_w * frame_h)
         
-        if cls == PERSON_CLASS and conf > 0.6 and area_pct > 0.01:
+        if cls == PERSON_CLASS and conf > 0.4 and area_pct > 0.01:
             persons.append({"box": xyxy, "conf": conf})
-        if cls == PHONE_CLASS and conf > 0.5:
+        # Stricter confidence threshold for phones to prevent false detections (e.g. hands/keyboards)
+        if cls == PHONE_CLASS and conf > 0.55:
             phones.append({"box": xyxy, "conf": conf})
 
-    person_count = len(persons)
-
-    # 1. NO FACE (Phase 2)
-    if person_count == 0:
-        if user_tracking_state[userId]["no_face_start"] is None:
-            user_tracking_state[userId]["no_face_start"] = now
-        if now - user_tracking_state[userId]["no_face_start"] > 2.0:
-            return "no_face", "Please stay in front of camera", 0.6
-    else:
-        user_tracking_state[userId]["no_face_start"] = None
-
-    # 2. MULTIPLE FACES (Phase 1)
-    if person_count >= 2:
-        if user_tracking_state[userId]["multiple_start"] is None:
-            user_tracking_state[userId]["multiple_start"] = now
-        if now - user_tracking_state[userId]["multiple_start"] > 1.5:
-            return "multiple_faces", "Multiple people detected", 0.95
-    else:
-        user_tracking_state[userId]["multiple_start"] = None
-
-    # 3. PHONE DETECTION (Phase 5 - Near face region)
-    phone_in_use = False
-    if phones and persons:
-        p_box = persons[0]["box"]
-        for ph in phones:
-            ph_box = ph["box"]
-            # Overlap check
-            if not (ph_box[2] < p_box[0] or ph_box[0] > p_box[2] or ph_box[3] < p_box[1] or ph_box[1] > p_box[3]):
-                phone_in_use = True
-                break
+    ear = advanced.get("ear", 0.0)
+    face_count = advanced.get("face_count", 0)
     
-    if phone_in_use:
-        if user_tracking_state[userId]["phone_start"] is None:
-            user_tracking_state[userId]["phone_start"] = now
-        if now - user_tracking_state[userId]["phone_start"] > 1.5:
-            return "phone", "Stop using phone", 0.95
-    else:
-        user_tracking_state[userId]["phone_start"] = None
+    # 1. NO FACE
+    # If YOLO can't even see a person, they have left the frame.
+    if len(persons) == 0:
+        return "no_face", "Please stay in frame", 0.90
 
-    # 4. DROWSINESS (Phase 4)
-    if advanced.get("ear", 1.0) < EYE_AR_THRESH:
-        if user_tracking_state[userId]["drowsy_start"] is None:
-            user_tracking_state[userId]["drowsy_start"] = now
-        if now - user_tracking_state[userId]["drowsy_start"] > 1.5:
-            return "drowsy", "Stay alert", 0.90
-    else:
-        user_tracking_state[userId]["drowsy_start"] = None
+    # 2. MULTIPLE FACES
+    # Use MediaPipe's exact face count rather than YOLO's person count
+    if face_count >= 2:
+        return "multiple_faces", "Multiple faces detected", 0.95
 
-    # 5. HEAD POSE (Phase 3 & 9)
+    # 3. PHONE DETECTION
+    if len(phones) > 0:
+        return "phone", "Stop using phone", 0.95
+
+    # 4. DROWSINESS 
+    if ear > 0.0 and ear < 0.14:
+        return "drowsy", "Wake up and pay attention", 0.90
+
+    # 5. HEAD POSE (DISTRACTED)
     yaw = advanced.get("yaw", 0)
     pitch = advanced.get("pitch", 0)
-    is_distracted = abs(yaw) > 20 or pitch < -25
+    is_distracted = abs(yaw) > 40 or pitch < -45
     
+    now = time.time()
     if is_distracted:
         if user_tracking_state[userId]["distracted_start"] is None:
             user_tracking_state[userId]["distracted_start"] = now
-        if now - user_tracking_state[userId]["distracted_start"] > 1.5:
+            
+        # Only return distracted if they've been looking away for a LONG time (e.g., 3.5 seconds)
+        if now - user_tracking_state[userId]["distracted_start"] > 3.5:
             return "distracted", "Pay attention", 0.85
+        else:
+            return "attentive", "Good! You are attentive", 0.90
     else:
         user_tracking_state[userId]["distracted_start"] = None
 
-    # 6. TALKING / MUTED (Phase 6 & 7)
-    if advanced.get("is_speaking"):
-        if is_muted:
-            return "speaking_muted", "You are speaking while muted", 0.85
-        return "speaking", None, 0.90
-
     # Default
-    return "attentive", None, 0.90
+    return "attentive", "Good! You are attentive", 0.90
 
 
 def get_agentic_insights(user_id: str) -> dict:

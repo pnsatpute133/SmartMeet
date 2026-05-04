@@ -36,37 +36,39 @@ async function saveFinalReport(roomId, roomData) {
   try {
     dbg('DB', `Saving final report for room: ${roomId}`);
 
-    // ── ATTENDANCE FIX: Process users still in the room ──────────────────
     const now = new Date();
+    // Issue 4: Use attendanceMap (keyed by userId) as source of truth
+    const aMap = roomData.attendanceMap || {};
+
+    // Flush users still active in room into the map
     Object.values(roomData.users || {}).forEach(user => {
       const joinTime = user.joinedAt ? new Date(user.joinedAt) : now;
-      const duration = Math.floor((now - joinTime) / 1000);
-      
-      roomData.attendanceLog.push({
-        userId: user.userId,
-        name: user.name,
-        role: user.role,
-        joinTime: joinTime,
-        leaveTime: now,
-        durationSeconds: duration > 0 ? duration : 0
-      });
+      const entry = aMap[user.userId];
+      if (entry) {
+        entry.leaveTime = now;
+        entry.durationSeconds = Math.max(
+          entry.durationSeconds,
+          Math.floor((now - new Date(entry.joinTime)) / 1000)
+        );
+      } else {
+        aMap[user.userId] = {
+          userId: user.userId, name: user.name, role: user.role,
+          joinTime, leaveTime: now,
+          durationSeconds: Math.max(0, Math.floor((now - joinTime) / 1000)),
+        };
+      }
     });
-    // Optional: deduplicate if needed, but usually users are unique per socketId
-    
-    dbg('DB', `Attendance records total: ${roomData.attendanceLog?.length || 0}`);
+
+    const dedupedLog = Object.values(aMap);
+    dbg('DB', `Attendance records (1 per user): ${dedupedLog.length}`);
+
     const MeetingReport = require('../models/MeetingReport');
     await MeetingReport.findOneAndUpdate(
       { meetingId: roomId },
-      {
-        $set: {
-          meetingId: roomId,
-          endedAt: now,
-          attendance: roomData.attendanceLog
-        }
-      },
+      { $set: { meetingId: roomId, endedAt: now, attendance: dedupedLog } },
       { upsert: true }
     );
-    console.log(`[Database] ✅ Final attendance saved for ${roomId}`);
+    console.log(`[Database] ✅ Final attendance saved for ${roomId} (${dedupedLog.length} users)`);
   } catch (err) {
     console.error('[Database] ❌ Report save error:', err.message);
     dbg('DB', 'Full error:', err);
@@ -153,7 +155,8 @@ module.exports = (io, socket) => {
         host: { socketId: socket.id, userId, name },
         users: {},
         waitingUsers: {},
-        attendanceLog: [],
+        attendanceLog: [],     // kept for compat
+        attendanceMap: {},     // Issue 4: keyed by userId — 1 row per user
         screenShareRequest: null
       };
     }
@@ -164,6 +167,21 @@ module.exports = (io, socket) => {
       socketId: socket.id, userId, name, role,
       isMuted: false, isVideoOff: false, isScreenSharing: false, joinedAt: new Date()
     };
+
+    // Issue 4: Upsert attendance map — preserve joinTime on reconnect
+    if (!rooms[roomId].attendanceMap) rooms[roomId].attendanceMap = {};
+    if (!rooms[roomId].attendanceMap[userId]) {
+      rooms[roomId].attendanceMap[userId] = {
+        userId, name, role,
+        joinTime: new Date(),
+        leaveTime: null,
+        durationSeconds: 0,
+      };
+    } else {
+      // Reconnect: update socket reference but keep original joinTime
+      rooms[roomId].attendanceMap[userId].name = name;
+      dbg('Attendance', `User ${name} reconnected — updating existing attendance entry`);
+    }
     
     socket.roomId = roomId; socket.userId = userId; socket.userName = name; socket.role = role;
 
@@ -635,19 +653,25 @@ module.exports = (io, socket) => {
     const room = rooms[roomId];
     const user = room.users[socket.id];
 
-    // PHASE 2: Attendance Tracking (Log leave time)
+    // Issue 4: Update attendanceMap on disconnect (upsert by userId)
     if (user) {
       const leaveTime = new Date();
       const duration = Math.floor((leaveTime - new Date(user.joinedAt)) / 1000);
-      dbg('Attendance', `${user.name} stayed ${duration}s in room ${roomId}`);
-      room.attendanceLog.push({
-        userId: user.userId,
-        name: user.name,
-        role: user.role,
-        joinTime: user.joinedAt,
-        leaveTime: leaveTime,
-        durationSeconds: duration > 0 ? duration : 0
-      });
+      dbg('Attendance', `${user.name} session ended: ${duration}s in room ${roomId}`);
+
+      if (!room.attendanceMap) room.attendanceMap = {};
+      const existing = room.attendanceMap[user.userId];
+      if (existing) {
+        // Accumulate total time (handles reconnects)
+        existing.leaveTime = leaveTime;
+        existing.durationSeconds += Math.max(0, duration);
+      } else {
+        room.attendanceMap[user.userId] = {
+          userId: user.userId, name: user.name, role: user.role,
+          joinTime: user.joinedAt, leaveTime,
+          durationSeconds: Math.max(0, duration),
+        };
+      }
     }
 
     // Remove from room map

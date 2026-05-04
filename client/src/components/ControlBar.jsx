@@ -1,8 +1,9 @@
 import {
   Mic, MicOff, Video, VideoOff, ScreenShare, Hand,
   MessageSquare, Users, Info, MoreVertical, PhoneOff,
-  SmilePlus, StopCircle
+  SmilePlus, StopCircle, Copy, Check
 } from 'lucide-react';
+import { useState, useCallback } from 'react';
 
 export default function ControlBar({
   isMuted, onToggleMute,
@@ -23,6 +24,16 @@ export default function ControlBar({
   const active = "p-3.5 rounded-full flex items-center justify-center transition-all duration-200 bg-[#ea4335] text-white hover:bg-[#d93025] focus:outline-none";
   const activeBlue = "relative group p-3.5 rounded-full flex items-center justify-center transition-all duration-200 bg-[#8ab4f8] text-black hover:bg-[#aecbfa] focus:outline-none";
 
+  const [codeCopied, setCodeCopied] = useState(false);
+  const shortCode = meetingCode ? meetingCode.slice(0, 8).toUpperCase() : '';
+
+  const handleCopy = useCallback(() => {
+    const link = `${window.location.origin}/meeting/${meetingCode}`;
+    navigator.clipboard.writeText(link).catch(() => {});
+    setCodeCopied(true);
+    setTimeout(() => setCodeCopied(false), 2000);
+  }, [meetingCode]);
+
   const Tooltip = ({ text }) => (
     <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-2 py-1 bg-[#202124] text-white text-[11px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none border border-white/10 shadow-lg z-50">
       {text}
@@ -32,11 +43,19 @@ export default function ControlBar({
   return (
     <div className="fixed bottom-0 left-0 w-full h-20 bg-[#202124]/95 backdrop-blur-sm border-t border-[#3c4043] flex items-center justify-between px-4 md:px-6 z-50">
 
-      {/* ── Left: Meeting ID ─────────────────────────────── */}
-      <div className="flex-1 flex items-center gap-3">
-        <div className="hidden md:flex items-center text-white/70 text-[13px] font-mono group cursor-pointer hover:text-white px-2 py-1 rounded transition-colors whitespace-nowrap select-all max-w-[180px] truncate">
-          {meetingCode}
-        </div>
+      {/* ── Left: Meeting Code (short + clickable) ─────────── */}
+      <div className="flex-1 flex items-center gap-2">
+        <button
+          onClick={handleCopy}
+          title="Copy meeting link"
+          className="hidden md:flex items-center gap-2 text-white/70 hover:text-white text-[13px] font-mono px-2 py-1 rounded transition-colors group"
+        >
+          <span className="font-bold tracking-widest">{shortCode}</span>
+          {codeCopied
+            ? <Check size={14} className="text-green-400" />
+            : <Copy size={14} className="text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+          }
+        </button>
         <button className="p-2 text-[#9aa0a6] hover:bg-white/5 rounded-full transition-colors" title="Meeting info">
           <Info size={17} />
         </button>

@@ -56,12 +56,14 @@ function ScoreRing({ score, size = 60 }) {
 }
 
 // ── Horizontal time bar ────────────────────────────────────────────────────
-function TimeBar({ attentive, distracted, phone, multiPeople, total }) {
+function TimeBar({ attentive, distracted, phone, multiPeople, drowsy, noFace, total }) {
   const t = total || 1;
   const segments = [
     { pct: (attentive    / t) * 100, color: '#22c55e' },
     { pct: (distracted   / t) * 100, color: '#f59e0b' },
     { pct: (phone        / t) * 100, color: '#ef4444' },
+    { pct: (drowsy       / t) * 100, color: '#3b82f6' },
+    { pct: (noFace       / t) * 100, color: '#94a3b8' },
     { pct: (multiPeople  / t) * 100, color: '#a855f7' },
   ];
   return (
@@ -337,6 +339,8 @@ export default function TeacherDashboard({
                         attentive={t.attentiveTime}
                         distracted={t.distractedTime}
                         phone={t.phoneTime}
+                        drowsy={t.drowsyTime}
+                        noFace={t.noFaceTime}
                         multiPeople={t.multiplePeopleTime}
                         total={total}
                       />
@@ -345,6 +349,8 @@ export default function TeacherDashboard({
                           { c: '#22c55e', v: t.attentiveTime,      label: 'Att' },
                           { c: '#f59e0b', v: t.distractedTime,     label: 'Dis' },
                           { c: '#ef4444', v: t.phoneTime,          label: 'Ph' },
+                          { c: '#3b82f6', v: t.drowsyTime,         label: 'Slp' },
+                          { c: '#94a3b8', v: t.noFaceTime,         label: 'NoF' },
                         ].map(({ c, v, label }) => (
                           <span key={label} style={{ color: c, fontSize: '9px', fontWeight: 700 }}>
                             {label} {Math.round((v / total) * 100)}%

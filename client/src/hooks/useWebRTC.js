@@ -91,14 +91,17 @@ export default function useWebRTC(roomId, user) {
     pc.ontrack = (evt) => {
       console.log(`[WebRTC] 📹 Remote track from: ${remoteSocketId} | kind: ${evt.track.kind}`);
       
-      // Add the specific track that triggered this event
-      remoteStream.addTrack(evt.track);
+      // Crucial Fix: Use the stream provided by WebRTC to prevent audio-drop bugs
+      // caused by rapidly reassigning srcObject with new MediaStream instances.
+      const finalStream = (evt.streams && evt.streams[0]) ? evt.streams[0] : remoteStream;
       
-      // Force React state update by creating a new MediaStream reference
-      const updatedStream = new MediaStream(remoteStream.getTracks());
-      setPeerStreams(prev => ({ ...prev, [remoteSocketId]: updatedStream }));
+      if (!evt.streams || !evt.streams.length) {
+        finalStream.addTrack(evt.track);
+      }
       
-      detectActiveSpeaker(updatedStream, remoteSocketId);
+      setPeerStreams(prev => ({ ...prev, [remoteSocketId]: finalStream }));
+      
+      detectActiveSpeaker(finalStream, remoteSocketId);
     };
 
     pc.onicecandidate = ({ candidate }) => {

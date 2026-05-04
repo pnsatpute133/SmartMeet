@@ -20,7 +20,7 @@ import AIAlertToast from '../components/AIAlertToast';
 import {
   Wifi, Clock, Loader2, CameraOff, Grid, Layout,
   Maximize, Settings, MoreVertical, X, Shield, Brain, ArrowRight,
-  MonitorPlay
+  MonitorPlay, Copy, Check
 } from 'lucide-react';
 
 export default function MeetingRoom() {
@@ -95,6 +95,8 @@ export default function MeetingRoom() {
     downloadCSV,
   } = useEngagementMonitor({
     localStream,
+    peerStreams,      // ← pass peer streams for host-side monitoring
+    participants,     // ← pass participants for name/role lookup
     socket,
     userId: user?._id,
     roomId,
@@ -121,6 +123,17 @@ export default function MeetingRoom() {
   const [layoutMode, setLayoutMode]           = useState('grid'); // 'grid' | 'spotlight'
   const [unreadCount, setUnreadCount]         = useState(0);
   const [screenSharePending, setScreenSharePending] = useState(false);
+  const [meetingCodeCopied, setMeetingCodeCopied]   = useState(false);
+
+  // Short meeting code for display (first 8 chars, uppercase)
+  const shortMeetingCode = roomId ? roomId.slice(0, 8).toUpperCase() : '';
+
+  const handleCopyMeetingCode = useCallback(() => {
+    const meetingLink = `${window.location.origin}/meeting/${roomId}`;
+    navigator.clipboard.writeText(meetingLink).catch(() => {});
+    setMeetingCodeCopied(true);
+    setTimeout(() => setMeetingCodeCopied(false), 2000);
+  }, [roomId]);
 
   const timerRef = useRef(null);
 
@@ -177,7 +190,27 @@ export default function MeetingRoom() {
     }
   }, [chatMessages.length, activePanel]);
 
-  // ── Layout calculation ────────────────────────────────────
+  // ── Detect active screen sharer (local or remote) ─────────────
+  const activeScreenSharer = useMemo(() => {
+    // Check if local user is sharing
+    if (localStatus.isScreenSharing) return { socketId: 'local', stream: screenStream || localStream, name: `${user?.name || 'You'} (Screen)` };
+    // Check remote participants
+    const sharingParticipant = participants?.find(p => p.isScreenSharing);
+    if (sharingParticipant) {
+      const stream = peerStreams[sharingParticipant.socketId];
+      return { socketId: sharingParticipant.socketId, stream, name: `${sharingParticipant.name} (Screen)` };
+    }
+    return null;
+  }, [localStatus.isScreenSharing, participants, peerStreams, screenStream, localStream, user]);
+
+  // ── Auto switch layout when screen share is active ─────────────
+  useEffect(() => {
+    if (activeScreenSharer) {
+      setLayoutMode('spotlight');
+    }
+  }, [!!activeScreenSharer]);
+
+  // ── Layout calculation ────────────────────────────────────────
   const totalTiles = Object.keys(peerStreams || {}).length + 1; // +1 for local
   const gridClass =
     totalTiles === 1 ? 'grid-cols-1 max-w-3xl mx-auto' :
@@ -367,7 +400,17 @@ export default function MeetingRoom() {
             <Clock size={15} className="text-blue-400" />
             <span>{meetingTime}</span>
             <span className="w-px h-3.5 bg-white/10" />
-            <span className="opacity-70 uppercase text-[11px] tracking-wide max-w-[160px] truncate">{roomId}</span>
+            <button
+              onClick={handleCopyMeetingCode}
+              title="Copy meeting link"
+              className="flex items-center gap-1.5 opacity-70 hover:opacity-100 transition-opacity text-[11px] uppercase tracking-wide"
+            >
+              <span className="font-mono font-bold">{shortMeetingCode}</span>
+              {meetingCodeCopied
+                ? <Check size={11} className="text-green-400" />
+                : <Copy size={11} className="text-blue-300" />
+              }
+            </button>
           </div>
           {isHost && (
             <div className="flex items-center gap-1.5 px-3 py-1 bg-blue-600/80 backdrop-blur-sm rounded-lg text-[11px] font-bold text-white uppercase tracking-widest w-fit pointer-events-auto border border-blue-400/20">
@@ -425,6 +468,63 @@ export default function MeetingRoom() {
       {/* ── MAIN AREA (PHASE 1 Flex Layout) ────────────────────── */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden pt-16 pb-20 px-2 lg:px-4 gap-3 relative">
         <div className="flex-1 flex items-center justify-center overflow-hidden">
+          {/* ── SPOTLIGHT MODE (screen share active) ─────────────── */}
+          {activeScreenSharer && layoutMode === 'spotlight' ? (
+            <div className="flex flex-col w-full h-full gap-2">
+              {/* Main screen share view */}
+              <div className="flex-1 min-h-0">
+                <VideoTile
+                  stream={activeScreenSharer.stream}
+                  name={activeScreenSharer.name}
+                  isLocal={activeScreenSharer.socketId === 'local'}
+                  isMuted={activeScreenSharer.socketId === 'local' ? localStatus.isMuted : participants?.find(p => p.socketId === activeScreenSharer.socketId)?.isMuted}
+                  isVideoOff={false}
+                  isHandRaised={false}
+                  isActiveSpeaker={false}
+                  isHost={activeScreenSharer.socketId === 'local' ? isHost : participants?.find(p => p.socketId === activeScreenSharer.socketId)?.role === 'host'}
+                  isScreenSharing={true}
+                />
+              </div>
+              {/* Thumbnail strip of other participants */}
+              <div className="flex gap-2 h-[120px] overflow-x-auto shrink-0 pb-1">
+                {/* Local tile (only if not the screen sharer) */}
+                {activeScreenSharer.socketId !== 'local' && (
+                  <div className="w-[160px] shrink-0">
+                    <VideoTile
+                      stream={localStream}
+                      name={`${user?.name || 'You'} (You)`}
+                      isLocal={true}
+                      isMuted={localStatus.isMuted}
+                      isVideoOff={localStatus.isVideoOff}
+                      isHandRaised={localStatus.isHandRaised}
+                      isActiveSpeaker={localStatus.activeSpeaker === 'local'}
+                      isHost={isHost}
+                      role="You"
+                    />
+                  </div>
+                )}
+                {/* Remote tiles (skip the screen sharer) */}
+                {Object.entries(peerStreams || {}).filter(([sid]) => sid !== activeScreenSharer.socketId).map(([socketId, stream]) => {
+                  const p = participants?.find(x => x.socketId === socketId);
+                  return (
+                    <div key={socketId} className="w-[160px] shrink-0">
+                      <VideoTile
+                        stream={stream}
+                        name={p?.name || 'Attendee'}
+                        isMuted={p?.isMuted}
+                        isVideoOff={p?.isVideoOff}
+                        isHandRaised={p?.isHandRaised}
+                        isActiveSpeaker={localStatus.activeSpeaker === socketId}
+                        isHost={p?.role === 'host'}
+                        role={p?.role}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+          /* ── GRID MODE (normal / no screen share) ─────────────── */
           <div className={`grid ${gridClass} gap-3 w-full h-full items-center content-center`}>
             {/* Local Video */}
             <VideoTile
@@ -457,6 +557,7 @@ export default function MeetingRoom() {
               );
             })}
           </div>
+          )}
         </div>
 
         {/* Sliding Sidebar Panel (PHASE 11) */}
